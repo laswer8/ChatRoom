@@ -1,0 +1,2 @@
+# ChatRoom
+一个在Linux环境下,使用Tcp长连接的，支持群组聊天功能的聊天室程序，使用c++11标准，并使用nginx新提供的tcp负载均衡模块进行集群，使用了muduo网络库，nlohmann/json，并使用mysqlclient与hiredis库实现数据库缓存以及消息队列
