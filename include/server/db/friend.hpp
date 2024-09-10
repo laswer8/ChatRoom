@@ -5,29 +5,29 @@
 
 class Friend{
     private:
-        int myid;
-        int friendid;
+        string username;
+        string friendname;
     public:
-        void setmyid(int id){myid = id;}
-        void setfriendid(int id){friendid = id;}
-        int getmyid(){return myid;}
-        int getfriendid(){return friendid;}
+        void setusername(const string& _username){username = _username;}
+        void setfriendname(const string& _username){friendname = _username;}
+        string getusername(){return username;}
+        string getfriendname(){return friendname;}
 };
 
 class FriendReq{
     private:
-        int id;
+        string username;
         string name;
-        int fromid;
+        string fromname;
         string jsonmsg;
     public:
-        void setid(int _id){id = _id;}
+        void setusername(string _username){username = _username;}
         void setname(string _name){name = _name;}
-        void setfromid(int _id){fromid = _id;}
+        void setfromname(string _fromname){fromname = _fromname;}
         void setjsonmsg(string msg){jsonmsg = msg;}
-        int getid(){return id;}
+        string getusername(){return username;}
         string getname(){return name;}
-        int getfromid(){return fromid;}
+        string getfromname(){return fromname;}
         string getjsonmsg(){return jsonmsg;}
 };
 

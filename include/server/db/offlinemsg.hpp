@@ -5,13 +5,13 @@
 
 class OfflineMsg{
     private:
-        int id;
+        string username;
         string jsonMsg;
     public:
-        int GetId()const{return id;}
+        string Getusername()const{return username;}
         string GetJsonMsg()const{return jsonMsg;}
         
-        void SetId(int _id){id = _id;}
+        void Setusername(const string& _username){username = _username;}
         void SetJsonMsg(const string& str){jsonMsg = str;}
 };
 void from_json(const json& j,OfflineMsg& msg)

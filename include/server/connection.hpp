@@ -788,21 +788,22 @@ class DatabaseCache{
             redis = redispool;
             mysql->start();
             redis->start();
-
             auto mysqlconn = mysql->GetConnection();
             auto redisconn = redis->take();
             string nosql = "flushall";
-            redis->ExecuteNoSQL(redisconn,nosql.c_str());
+            redis->ExecuteNoSQL(redisconn, nosql.c_str());
             bool need_scan = false;
             string str;
             int ret = -1;
             int count = 0;
             vector<string> databases = mysql->GetDataBases();
-            for(auto database = databases.begin();database != databases.end();database++){
-                //LOG_INFO<<"数据库："<<*database;
-                str = "use "+ *database;
-                ret = mysql->ExecuteSql(mysqlconn,str.c_str());
-                if(ret == -1){
+            for (auto database = databases.begin(); database != databases.end(); database++)
+            {
+                // LOG_INFO<<"数据库："<<*database;
+                str = "use " + *database;
+                ret = mysql->ExecuteSql(mysqlconn, str.c_str());
+                if (ret == -1)
+                {
                     need_scan = true;
                     mysql->GetDataBases().erase(database);
                     continue;
@@ -810,111 +811,115 @@ class DatabaseCache{
                 /*
                     遍历数据库中的每一张表，并将其添加到布隆选择器，储存每条属性的唯一值（主键），并添加到redis中设计缓存
                 */
-                mt19937 gen(rd());//随机数种子
-                unordered_map<string,vector<string>> tables = mysql->GetTables();
-                for(auto table = tables[*database].begin();table != tables[*database].end();table++){
+                mt19937 gen(rd()); // 随机数种子
+                unordered_map<string, vector<string>> tables = mysql->GetTables();
+                for (auto table = tables[*database].begin(); table != tables[*database].end(); table++)
+                {
                     string tabletype = _tabletypemap[*table];
-                    //LOG_INFO<<"表："<<*table<<"-"<<tabletype;
-                    str = "select * from "+ *table;
-                    ret = mysql->ExecuteSql(mysqlconn,str.c_str());
-                    
-                    if(ret == -1){
+                    // LOG_INFO<<"表："<<*table<<"-"<<tabletype;
+                    str = "select * from " + *table;
+                    ret = mysql->ExecuteSql(mysqlconn, str.c_str());
+
+                    if (ret == -1)
+                    {
                         need_scan = true;
                         mysql->GetTables()[*database].erase(table);
                         continue;
                     }
 
                     auto res = mysql->ResEcho(mysqlconn);
-                    if(res == nullptr || res->res<=0){
+                    if (res == nullptr || res->res <= 0)
+                    {
                         continue;
                     }
                     int sum_elements = res->res * res->FieldsNum;
-                    uniform_int_distribution<> randomnumber(3600,36000);
-                    for(int table_element = 0; table_element < sum_elements;table_element+=res->FieldsNum){
+                    uniform_int_distribution<> randomnumber(3600, 36000);
+                    for (int table_element = 0; table_element < sum_elements; table_element += res->FieldsNum)
+                    {
                         vector<string> values;
-                        for(int i=table_element;i<table_element+res->FieldsNum;i++){
+                        for (int i = table_element; i < table_element + res->FieldsNum; i++)
+                        {
                             string temp = res->str_vec[i];
-                            replace(temp.begin(),temp.end(),' ','#');
+                            replace(temp.begin(), temp.end(), ' ', '#');
                             values.emplace_back(temp);
                         }
-                            
+
                         string key;
-                        if(tabletype == "unionstring" || tabletype == "doublestring")
-                            key = *database+":" + *table + ":"+tabletype+":"+ values[0]+":"+values[1];
+                        if (tabletype == "unionstring" || tabletype == "doublestring")
+                            key = *database + ":" + *table + ":" + tabletype + ":" + values[0] + ":" + values[1];
                         else
-                            key = *database+":" + *table + ":"+tabletype+":"+ values[0];
-                        
-                        BlomSelection.add(key,redisconn);
-                        string value;
-                        value = "{";
-                        string s="";
-                        for(int ii=0;ii<res->FieldsNum;ii++){
-                            s+="\""+res->FieldsName[ii]+"\":\""+values[ii]+"\"";
-                            if(ii < res->FieldsNum-1)
-                            s+=",";
-                        }
-                        value += s + "}";
-                        replace(value.begin(),value.end(),' ','\x01');
-                        //LOG_INFO<<key<<" "<<value;
-                        if(tabletype == "hash")
-                            nosql = "lpush "+key+" "+value;
-                        else{
-                            nosql = "SET "+key+" "+value + " EX "+to_string(randomnumber(gen));
-                        }
-                        //LOG_INFO<<"nosql: "<<nosql;
-                        ret = redis->ExecuteNoSQL(redisconn,nosql.c_str());
-                        if(ret == -1){
-                            if(tabletype == "hash"){
-                                LOG_INFO<<"DEL "<<key;
-                                nosql = "del "+key;
-                                redis->ExecuteNoSQL(redisconn,nosql.c_str());
-                            }
-                            continue;
-                        }
-                        
-                        if(tabletype == "hash"){
-                            auto a = redis->ResEcho(redisconn);
-                            //LOG_INFO<<a->str;
-                            nosql = "expire "+key+" "+to_string(randomnumber(gen));
-                            //LOG_INFO<<"expire: "<<nosql;
-                            ret = redis->ExecuteNoSQL(redisconn,nosql.c_str());
-                            //如果设置失败，即MySQL存在的数据没能同步到redis缓存上去，进行通报
-                            if(ret == -1)
-                            {
-                                LOG_INFO<<"DEL "<<key;
-                                nosql = "del "+key;
-                                redis->ExecuteNoSQL(redisconn,nosql.c_str());
-                            }
-                        }
-                        //LOG_INFO<<"缓存成功";
+                            key = *database + ":" + *table + ":" + tabletype + ":" + values[0];
+
+                        BlomSelection.add(key, redisconn);
+                        //             string value;
+                        //             value = "{";
+                        //             string s="";
+                        //             for(int ii=0;ii<res->FieldsNum;ii++){
+                        //                 s+="\""+res->FieldsName[ii]+"\":\""+values[ii]+"\"";
+                        //                 if(ii < res->FieldsNum-1)
+                        //                 s+=",";
+                        //             }
+                        //             value += s + "}";
+                        //             replace(value.begin(),value.end(),' ','\x01');
+                        //             //LOG_INFO<<key<<" "<<value;
+                        //             if(tabletype == "hash")
+                        //                 nosql = "lpush "+key+" "+value;
+                        //             else{
+                        //                 nosql = "SET "+key+" "+value + " EX "+to_string(randomnumber(gen));
+                        //             }
+                        //             //LOG_INFO<<"nosql: "<<nosql;
+                        //             ret = redis->ExecuteNoSQL(redisconn,nosql.c_str());
+                        //             if(ret == -1){
+                        //                 if(tabletype == "hash"){
+                        //                     LOG_INFO<<"DEL "<<key;
+                        //                     nosql = "del "+key;
+                        //                     redis->ExecuteNoSQL(redisconn,nosql.c_str());
+                        //                 }
+                        //                 continue;
+                        //             }
+
+                        //             if(tabletype == "hash"){
+                        //                 auto a = redis->ResEcho(redisconn);
+                        //                 //LOG_INFO<<a->str;
+                        //                 nosql = "expire "+key+" "+to_string(randomnumber(gen));
+                        //                 //LOG_INFO<<"expire: "<<nosql;
+                        //                 ret = redis->ExecuteNoSQL(redisconn,nosql.c_str());
+                        //                 //如果设置失败，即MySQL存在的数据没能同步到redis缓存上去，进行通报
+                        //                 if(ret == -1)
+                        //                 {
+                        //                     LOG_INFO<<"DEL "<<key;
+                        //                     nosql = "del "+key;
+                        //                     redis->ExecuteNoSQL(redisconn,nosql.c_str());
+                        //                 }
                     }
-                    
+                    // LOG_INFO<<"缓存成功";
                 }
-                
             }
-            if(need_scan){
+
+            if (need_scan)
+            {
                 mysql->clear();
                 mysql->scan();
             }
             redis->recycle(redisconn);
             mysql->RecycleConnection(mysqlconn);
-            
         }
-        
-        DatabaseCache(){
-            _tabletypemap.insert({"User","string"});
-            _tabletypemap.insert({"OfflineMessage","hash"});
-            _tabletypemap.insert({"AllGroup","string"});
-            _tabletypemap.insert({"Friend","doublestring"});
-            _tabletypemap.insert({"FriendREQ","unionstring"});
-            _tabletypemap.insert({"GroupUser","unionstring"});
-            _tabletypemap.insert({"GroupREQ","unionstring"});
-            _tabletypemap.insert({"test_table1","string"});
-            
-            pthread_cond_init(&_cond,NULL);
-            init();
-        }
-    
+
+DatabaseCache()
+{
+    _tabletypemap.insert({"User", "string"});
+    _tabletypemap.insert({"OfflineMessage", "hash"});
+    _tabletypemap.insert({"AllGroup", "string"});
+    _tabletypemap.insert({"Friend", "doublestring"});
+    _tabletypemap.insert({"FriendREQ", "unionstring"});
+    _tabletypemap.insert({"GroupUser", "unionstring"});
+    _tabletypemap.insert({"GroupREQ", "unionstring"});
+    _tabletypemap.insert({"test_table1", "string"});
+
+    pthread_cond_init(&_cond, NULL);
+    init();
+}
+
     public:
 
         DatabaseCache(const DatabaseCache&)=delete;

@@ -29,7 +29,8 @@ enum MsgType{
     TIP_MSG,            //通知消息              23                                                                       ErrNO  Message
     FRIEND_ACC_TO_ACK,  //同意添加好友本地确认  24              fromid fromname
     FRIEND_ACC_FROM_ACK,//同意添加好友对方确认  25
-    GROUP_REMOVE_ACK
+    GROUP_REMOVE_ACK,
+    USER_ONLINE_ACK,    //用户上线确认      用于通知用户对方上线
 };
 #endif // !PUBLIC_HANDFILE
 

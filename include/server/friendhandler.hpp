@@ -11,17 +11,20 @@ public:
 
     //Friend表：检测是否已有req->id与req->friendid,有返回true
     bool check(Friend& f){
-        string userid = to_string(f.getmyid());
-        string friendid = to_string(f.getfriendid());
+        string username = f.getusername();
+        string friendname = f.getfriendname();
         auto cache = DatabaseCache::GetInstance();
-        string primarykey = cache->GeneratePrimaryKey("Chat","Friend",userid+":"+friendid);
+        string primarykey = cache->GeneratePrimaryKey("Chat","Friend",username+":"+friendname);
         auto res = cache->cachefind("Friend",primarykey);
         if(res == nullptr || res->str.empty()){
-            string sql = "select true from Friend where userid in("+userid+","+friendid+") and friendid in("+friendid+","+userid+")";
+            string sql = "select true from Friend where username in('"+username+"','"+friendname+"') and friendname in('"+friendname+"','"+username+"')";
             auto ret = cache->MySQLquery("Chat",sql);
             if(ret == nullptr || ret->res ==0){
                 return false;
             }
+            string value = "{\"username\":\""+username+"\",\"friendname\":\""+friendname+"\"}";
+            string time = cache->RandomNum(3600,36000);
+            cache->cacheadd("Friend",primarykey,value,time);
         }
         //此处不能使用布隆判断是否存在，因为布隆不会删除以及删除的键
         return true;
@@ -30,15 +33,15 @@ public:
     //Friend表：删除req->id与req->friendid对应的记录
     bool removeFriend(Friend& f){
         //friend表中，两个用户之间的好友关系是双向的，因此删除redis缓存也要一次删除两个
-        string userid = to_string(f.getmyid());
-        string friendid = to_string(f.getfriendid());
+        string username = f.getusername();
+        string friendname = f.getfriendname();
         auto cache = DatabaseCache::GetInstance();
-        string primarykey[2] = {userid+":"+friendid,friendid+":"+userid};
+        string primarykey[2] = {username+":"+friendname,friendname+":"+username};
         string key1 = cache->GeneratePrimaryKey("Chat","Friend",primarykey[0]);
         string key2 = cache->GeneratePrimaryKey("Chat","Friend",primarykey[1]);
         cache->cacheremove(key1);
         cache->cacheremove(key2);
-        string sql = "delete from Friend where userid in("+userid+","+friendid+") and friendid in("+friendid + ","+userid+")";
+        string sql = "delete from Friend where username in('"+username+"','"+friendname+"') and friendname in('"+friendname + "','"+username+"')";
         auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr)
         {   
@@ -51,20 +54,20 @@ public:
 
     //请求添加好友
     bool requst(FriendReq& req){
-        string id = to_string(req.getid());
-        string fromid = to_string(req.getfromid());
+        string username = req.getusername();
+        string fromname = req.getfromname();
         string jsonmsg = req.getjsonmsg();
         auto cache = DatabaseCache::GetInstance();
         //不需要检测是否存在申请，因为存在申请会导致插入失败
         //将添加好友的消息添加到FriendREQ表中，有req->id自身的id,req->friendid请求添加的id,req->jsonmsg json消息
-        string sql = "insert into FriendREQ values("+id+","+fromid+",'"+jsonmsg+"')";
+        string sql = "insert into FriendREQ values('"+username+"','"+fromname+"','"+jsonmsg+"')";
         auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr)
         {
             return false;
         }
         //请求一类一般不能添加布隆过滤器中，因为布隆过滤器不能删除键，一旦删除表中请求就会造成数据不一致
-        string primarykey = cache->GeneratePrimaryKey("Chat","FriendREQ",id+":"+fromid);
+        string primarykey = cache->GeneratePrimaryKey("Chat","FriendREQ",username+":"+fromname);
         cache->cacheadd("FriendREQ",primarykey,jsonmsg,cache->RandomNum(3600,36000));
         return true;
     }
@@ -72,9 +75,9 @@ public:
     //Friend表：获取好友列表
     vector<User> getfriend(Friend& f){
         //查询用户id的好友列表，好友可能为0
-        string id = to_string(f.getmyid());
+        string username = f.getusername();
         auto cache = DatabaseCache::GetInstance();
-        string sql = "select Friend.friendid ,User.name,User.state FROM `Friend` LEFT JOIN  `User` ON Friend.friendid = User.id where Friend.userid = "+id;
+        string sql = "select User.id ,User.name,User.username,User.email,User.phone,User.state FROM `Friend` LEFT JOIN  `User` ON Friend.friendname = User.username where Friend.username = '"+username+"'";
         auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr){
             return vector<User>();
@@ -86,7 +89,10 @@ public:
         for(int i = 0;i<count;i += ret->FieldsNum){
             user.setid(atoi(vec[i].c_str()));
             user.setname(vec[i+1]);
-            user.setstate(vec[i+2]);
+            user.setusername(vec[i+2]);
+            user.setemail(vec[i+3]);
+            user.setphone(vec[i+4]);
+            user.setstate(vec[i+5]);
             users.emplace_back(user);
         }
         return users;
@@ -95,8 +101,8 @@ public:
     //获取好友申请消息
     vector<OfflineMsg> getrequest(FriendReq& req){
         auto cache = DatabaseCache::GetInstance();
-        string id = to_string(req.getid());
-        string sql = "select message from FriendREQ where id = "+id;
+        string username = req.getusername();
+        string sql = "select message from FriendREQ where username = '"+username+"'";
         auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr || ret->res == 0){
             return vector<OfflineMsg>();
@@ -113,20 +119,20 @@ public:
     //Friend表：同意好友申请
     bool accept(Friend& req){
         //在Friend表插入req->id与req->friendid 、req->friendid与req->id
-        string userid = to_string(req.getmyid());
-        string friendid = to_string(req.getfriendid());
+        string username = req.getusername();
+        string friendname = req.getfriendname();
         auto cache = DatabaseCache::GetInstance();
         //检测是否存在申请
-        string sql = "select id from FriendREQ where id = "+userid+" and fromid = "+friendid;
+        string sql = "select username from FriendREQ where username = '"+username+"' and fromname = '"+friendname+"'";
         auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr || ret->res == 0){
             //LOG_INFO<<"申请1错误   res: "<<ret->res;
             return false;
         }
         //LOG_INFO<<ret->res<<" "<<ret->str_vec.size();
-        sql = "insert into Friend values("+userid+","+friendid+"),("+friendid+","+userid+")";
-        string key1 =cache->GeneratePrimaryKey("Chat","Friend",userid+":"+friendid);
-        string key2 = cache->GeneratePrimaryKey("Chat","Friend",friendid+":"+userid);
+        sql = "insert into Friend values('"+username+"','"+friendname+"'),('"+friendname+"','"+username+"')";
+        string key1 =cache->GeneratePrimaryKey("Chat","Friend",username+":"+friendname);
+        string key2 = cache->GeneratePrimaryKey("Chat","Friend",friendname+":"+username);
         ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr)
         {
@@ -134,8 +140,8 @@ public:
         }
         cache->bm_add(key1);
         cache->bm_add(key2);
-        string value1 = "{\"userid\":"+userid+",\"friendid\":"+friendid+"}";
-        string value2 = "{\"userid\":"+friendid+",\"friendid\":"+userid+"}";
+        string value1 = "{\"username\":\""+username+"\",\"friendname\":\""+friendname+"\"}";
+        string value2 = "{\"username\":\""+friendname+"\",\"friendname\":\""+username+"\"}";
         string time = cache->RandomNum(3600,36000);
         cache->cacheadd("Friend",key1,value1,time);
         cache->cacheadd("Friend",key2,value2,time);
@@ -146,12 +152,12 @@ public:
     bool removeREQ(FriendReq& req){
         //1. 根据req->id与req->friendid确定主键req->id:req->friendid
         //2. 删除FriendREQ表中对应的请求
-        string id = to_string(req.getid());
-        string friendid = to_string(req.getfromid());
+        string username = req.getusername();
+        string friendname = req.getfromname();
         auto cache = DatabaseCache::GetInstance();
-        string primarykey =cache->GeneratePrimaryKey("Chat","FriendREQ",id+":"+friendid);
+        string primarykey =cache->GeneratePrimaryKey("Chat","FriendREQ",username+":"+friendname);
         cache->cacheremove(primarykey);
-        string sql = "delete from FriendREQ where id = "+id+" and fromid = "+friendid;
+        string sql = "delete from FriendREQ where username = '"+username+"' and fromname = '"+friendname+"'";
         auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr){
             return false;
@@ -159,7 +165,15 @@ public:
         return true;
     }
 
-
+    vector<string> queryfriendid(string username){
+        auto cache = DatabaseCache::GetInstance();
+        string sql = "select username from Friend where friendname = '"+username+"'";
+        auto ret = cache->MySQLquery("Chat",sql);
+        if(ret == nullptr || ret->res <= 0){
+            return vector<string>();
+        }
+        return ret->str_vec;
+    }
 
 };
 

@@ -20,19 +20,19 @@ class Group{
     friend void from_json(const json& j,Group& group);
     private:
         int id;
-        int creatorid;
+        string creatorname;
         string name;
         string desc;
         vector<GroupMember> members;
     public:
-        Group(int _id = -1,string _name = "",string _desc = ""):id(_id),creatorid(_id),name(_name),desc(_desc){}
+        Group(int _id = -1,string _name = "",string _desc = ""):id(_id),name(_name),desc(_desc){}
         void setid(int _id){id = _id;}
-        void setcreatorid(int _id){creatorid = _id;}
+        void setcreatorname(string _username){creatorname = _username;}
         void setname(string _name){name = _name;}
         void setdesc(string _desc){desc = _desc;}
 
         int getid()const{return id;}
-        int getcreatorid()const{return creatorid;}
+        string getcreatorname()const{return creatorname;}
         string getname(){return name;}
         string getdesc(){return desc;}
         vector<GroupMember>& getmembers(){return members;}
@@ -50,6 +50,9 @@ void from_json(const json& j,Group& group)
         GroupMember m;
         m.setid(s["memberid"].get<int>());
         m.setname(s["membername"].get<string>());
+        m.setusername(s["memberusername"].get<string>());
+        m.setemail(s["memberemail"].get<string>());
+        m.setphone(s["memberphone"].get<string>());
         m.setrole(s["memberrole"].get<string>());
         m.setstate(s["memberstate"].get<string>());
         group.members.emplace_back(m);
@@ -70,6 +73,9 @@ void to_json(json& j,const Group& group)
         json t;
         t["memberid"] = member.getid();
         t["membername"] = member.getname();
+        t["memberusername"] = member.getusername();
+        t["memberemail"] = member.getemail();
+        t["memberphone"] = member.getphone();
         t["memberrole"]= member.getrole();
         t["memberstate"] = member.getstate();
         j["groupmembers"].push_back(t);

@@ -7,7 +7,7 @@ class UserHandler{
         //User表的插入操作
         bool insert(User& user){
             //因为insert是添加一个新数据，所以布隆选择器和缓存里都是没有的，因此需要手动添加保证数据一致性
-            string sql = "insert into User(name,password,state) values(\'"+user.getname()+"\',\'"+user.getpwd()+"\',\'"+user.getstate()+"\')";
+            string sql = "insert into User(name,username,password,email,phone,state) values(\'"+user.getname()+"\',\'"+user.getusername()+"\',\'"+user.getpwd()+"\',\'"+user.getemail()+"\',\'"+user.getphone()+"\',\'online\')";
             auto cache = DatabaseCache::GetInstance();
             auto ret = cache->MySQLquery("Chat",sql);
             if(ret == nullptr){
@@ -16,24 +16,24 @@ class UserHandler{
             }
             int id = mysql_insert_id(ret->sock);
             user.setid(id);
-            string primarykey = cache->GeneratePrimaryKey("Chat","User",to_string(id));
+            string primarykey = cache->GeneratePrimaryKey("Chat","User",user.getusername());
             //更新布隆缓存器
             cache->bm_add(primarykey);
-            string value = "{\"id\":"+to_string(id)+",\"name\":\""+user.getname()+"\",\"password\":\""+user.getpwd()+"\",\"state\":\"offline\"}";
+            string value = "{\"id\":\""+to_string(id)+"\",\"name\":\""+user.getname()+"\",\"username\":\""+user.getusername()+"\",\"password\":\""+user.getpwd()+"\",\"email\":\""+user.getemail()+"\",\"phone\":\""+user.getphone()+"\",\"state\":\"online\"}";
             string time = cache->RandomNum(3600,36000);
             //添加对应缓存键
             cache->cacheadd("User",primarykey,value,time);
             return true;
         }
 
-        //User表检测用户id密码是否正确
+        //User表检测用户账号密码是否正确
         bool check(User& user){
             auto cache = DatabaseCache::GetInstance();
-            string id = to_string(user.getid());
-            string primarykey = cache->GeneratePrimaryKey("Chat","User",id);
+            string username = user.getusername();
+            string primarykey = cache->GeneratePrimaryKey("Chat","User",username);
             //判断是否存在该用户，防止数据库穿透
             if(!cache->bm_exists(primarykey)){
-                LOG_INFO<<id<<"不存在";
+                LOG_INFO<<username<<"不存在";
                 return false;
             }
             //先在redis中查找该用户
@@ -43,7 +43,11 @@ class UserHandler{
                 json js = json::parse(res->str);
                 string pwd = js["password"].get<string>();
                 user.setname(js["name"].get<string>());
+                user.setid(js["id"].get<int>());
+                user.setemail(js["email"].get<string>());
+                user.setphone(js["phone"].get<string>());
                 user.setstate(js["state"].get<string>());
+                //如果缓存在redis中，查找到的其账号一定相同
                 if(pwd == user.getpwd())
                 {
                     return true;
@@ -52,17 +56,21 @@ class UserHandler{
                 return false;
             }
             //redis中没有缓存该键，在MySQL中查找，然后添加到redis中
-            string sql = "select name,state from User where id = "+id+" and password = \'"+user.getpwd()+"\'";
+            string sql = "select id,name,email,phone,state from User where username = \'"+username+"\' and password = \'"+user.getpwd()+"\'";
             auto ret = cache->MySQLquery("Chat",sql);
             if(ret == nullptr || ret->res == 0){
                 //该用户的passowrd与送进来的不一致
-                LOG_INFO<<"password: "<<user.getpwd()<<"错误";
+                LOG_INFO<<"账号或密码错误："<<username;
                 return false;
             }
-            user.setname(ret->str_vec[0]);
-            user.setstate(ret->str_vec[1]);
+            user.setid(atoi(ret->str_vec[0].c_str()));
+            user.setname(ret->str_vec[1]);
+            user.setemail(ret->str_vec[2]);
+            user.setphone(ret->str_vec[3]);
+            user.setstate(ret->str_vec[4]);
             //MySQL查找成功，将其缓存到redis
-            string value = "{\"id\":"+id+",\"name\":\""+user.getname()+"\",\"password\":\""+user.getpwd()+"\",\"state\":\"offline\"}";
+            string value = "{\"id\":"+ret->str_vec[0]+",\"name\":\""+ret->str_vec[1]+"\",\"username\":\""+username+"\",\"password\":\""+user.getpwd()+",\"email\":\""+ret->str_vec[2]+",\"phone\":\""+ret->str_vec[3]+",\"state\":\""+ret->str_vec[4]+"\"}";
+            cout<<value<<endl;
             cache->cacheadd("User",primarykey,value,cache->RandomNum(3600,36000));
             return true;
         }
@@ -71,11 +79,11 @@ class UserHandler{
         bool online(User& user){
             //修改表，延迟双删
             auto cache = DatabaseCache::GetInstance();
-            string id = to_string(user.getid());
-            string primarykey = cache->GeneratePrimaryKey("Chat","User",id);
+            string username = user.getusername();
+            string primarykey = cache->GeneratePrimaryKey("Chat","User",username);
             cache->cacheremove(primarykey);
             //更新表
-            string sql = "update User set state = \'online\' where id = "+id;
+            string sql = "update User set state = \'online\' where username = \'"+username+"\'";
             auto ret = cache->MySQLquery("Chat",sql);
             if(ret == nullptr)
                 return false;
@@ -87,11 +95,11 @@ class UserHandler{
         bool offline(User& user){
             //修改表，延迟双删
             auto cache = DatabaseCache::GetInstance();
-            string id = to_string(user.getid());
-            string primarykey = cache->GeneratePrimaryKey("Chat","User",id);
+            string username = user.getusername();
+            string primarykey = cache->GeneratePrimaryKey("Chat","User",username);
             cache->cacheremove(primarykey);
             //更新表
-            string sql = "update User set state = \'offline\' where id = "+id;
+            string sql = "update User set state = \'offline\' where username = \'"+username+"\'";
             auto ret = cache->MySQLquery("Chat",sql);
             if(ret == nullptr)
                 return false;
@@ -106,12 +114,20 @@ class UserHandler{
             string sql = "update User set state = 'offline' where state = 'online'";
             cache->MySQLquery("Chat",sql);
         }
-
+        bool isonline(string username){
+            auto cache = DatabaseCache::GetInstance();
+            string sql = "select 'true' from User where state = 'online' and username = \'"+username+"\'";
+            auto res = cache->MySQLquery("Chat",sql);
+            if(res == nullptr || res->res <= 0){
+                return false;
+            }
+            return true;
+        }
         //查询用户信息
         bool query(User& user){
             auto cache = DatabaseCache::GetInstance();
-            string id = to_string(user.getid());
-            string primarykey = cache->GeneratePrimaryKey("Chat","User",id);
+            string username = user.getusername();
+            string primarykey = cache->GeneratePrimaryKey("Chat","User",username);
             //判断是否存在过该用户
             if(!cache->bm_exists(primarykey)){
                 LOG_INFO<<primarykey<<"NOT FOUND";
@@ -122,23 +138,32 @@ class UserHandler{
                 //如果储存在redis缓存中
                 json js = json::parse(ret->str);
                 user.setname(js["name"].get<string>());
+                user.setid(js["id"].get<int>());
+                user.setemail(js["email"].get<string>());
+                user.setphone(js["phone"].get<string>());
                 user.setstate(js["state"].get<string>());
                 return true;
             }
             //redis不存在，在MySQL中查询
-            string sql = "select name,password,state from User where id = "+id;
+            string sql = "select id,name,password,email,phone,state from User where username = '"+username+"'";
             auto res = cache->MySQLquery("Chat",sql);
             if(res == nullptr || res->res <= 0){
                 LOG_INFO<<primarykey<<" Mysql查询失败,不存在该用户";
                 return false;
             }
-            string name = res->str_vec[0];
-            string password = res->str_vec[1];
-            string state = res->str_vec[2];
+            string id = res->str_vec[0];
+            string name = res->str_vec[1];
+            string password = res->str_vec[2];
+            string email = res->str_vec[3];
+            string phone = res->str_vec[4];
+            string state = res->str_vec[5];
+            user.setid(atoi(id.c_str()));
             user.setname(name);
+            user.setemail(email);
+            user.setphone(phone);
             user.setstate(state);
             //缓存到redis中
-            string value = "{\"id\":"+id+",\"name\":\""+name+"\",\"password\":\""+password+"\",\"state\":\""+state+"\"}";
+            string value = "{\"id\":"+id+",\"name\":\""+name+"\",\"username\":\""+username+"\",\"password\":\""+password+"\",\"email\":\""+email+"\",\"phone\":\""+phone+"\",\"state\":\""+state+"\"}";
             cache->cacheadd("User",primarykey,value,cache->RandomNum(3600,36000));
             return true;
 
