@@ -39,7 +39,7 @@
 
 #define MYSQL_HOST "127.0.0.1"
 #define MYSQL_PORT 3306
-#define MYSQL_USER "root"
+#define MYSQL_USER "laswer"
 #define MYSQL_PWD    "2836992987"
 #define MYSQL_DEFAULT_DB "Chat"
 #define MYSQL_CHARSET "utf8mb4"
@@ -206,16 +206,18 @@ class MysqlConnectionPool{
 
                 string use = "use "+i;
                 ret = ExecuteSql(conn,use.c_str());
-                
                 if(ret == -1 ){
                     LOG_INFO<<"Change DataBases Failed\n";
+                    RecycleConnection(conn);
                     return -1;
                 }
+                ResEcho(conn); // 清空结果集
 
                 ret = ExecuteSql(conn,"show tables");
                 
                 if(ret == -1 ){
                     LOG_INFO<<"Get MySQL Tables Failed\n";
+                    RecycleConnection(conn);
                     return -1;
                 }
                 auto res = ResEcho(conn);
@@ -377,6 +379,7 @@ class MysqlConnectionPool{
             }
 
             mysql_free_result(conn->mysqlres);
+            conn->mysqlres = nullptr;
             return ret;
         }
 
@@ -419,6 +422,8 @@ typedef struct redisconnect{
     void destory(){
         if(conn != nullptr)
             redisFree(conn);
+        if(result != nullptr)
+            freeReplyObject(result);
     }
 
 }RedisConnection;
@@ -790,13 +795,19 @@ class DatabaseCache{
             redis->start();
             auto mysqlconn = mysql->GetConnection();
             auto redisconn = redis->take();
-            string nosql = "flushall";
-            redis->ExecuteNoSQL(redisconn, nosql.c_str());
+            // //redis冷启动
+            // string nosql = "flushall";
+            // if(redis->ExecuteNoSQL(redisconn, nosql.c_str())== 0)
+            // {
+            //     redis->ResEcho(redisconn);
+            // }
+            
             bool need_scan = false;
             string str;
             int ret = -1;
             int count = 0;
             vector<string> databases = mysql->GetDataBases();
+            unordered_map<string, vector<string>> tables = mysql->GetTables();
             for (auto database = databases.begin(); database != databases.end(); database++)
             {
                 // LOG_INFO<<"数据库："<<*database;
@@ -808,11 +819,11 @@ class DatabaseCache{
                     mysql->GetDataBases().erase(database);
                     continue;
                 }
+                mysql->ResEcho(mysqlconn); // 清空结果集
                 /*
                     遍历数据库中的每一张表，并将其添加到布隆选择器，储存每条属性的唯一值（主键），并添加到redis中设计缓存
                 */
                 mt19937 gen(rd()); // 随机数种子
-                unordered_map<string, vector<string>> tables = mysql->GetTables();
                 for (auto table = tables[*database].begin(); table != tables[*database].end(); table++)
                 {
                     string tabletype = _tabletypemap[*table];
@@ -1026,6 +1037,7 @@ DatabaseCache()
                 redis->recycle(redisconn);
                 return false;
             }
+            redis->ResEcho(redisconn);
             if(tabletype == "hash"){
                 nosql = "expire " + key + " " + time;
                 // LOG_INFO<<"expire: "<<nosql;
@@ -1034,11 +1046,12 @@ DatabaseCache()
                 if (ret != 0)
                 {
                     nosql = "del " + key;
-                    redis->ExecuteNoSQL(redisconn, nosql.c_str());
+                    if(redis->ExecuteNoSQL(redisconn, nosql.c_str()) == 0)redis->ResEcho(redisconn);
                     LOG_INFO << "Redis同步错误: " << nosql;
                     redis->recycle(redisconn);
                     return false;
                 }
+                redis->ResEcho(redisconn);
                 //LOG_INFO<<"Redis缓存成功";
             }
             redis->recycle(redisconn);
@@ -1053,6 +1066,7 @@ DatabaseCache()
             if(ret != 0){   
                 return false;
             }
+            redis->ResEcho(redisconn);
             return true;
         }
 

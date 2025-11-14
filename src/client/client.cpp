@@ -231,15 +231,13 @@ private:
         int groupid = j["groupid"].get<int>();
         string fromusername = j["fromusername"].get<string>();
         string fromname = j["fromname"].get<string>();
-        auto it = find_if(grouplist.begin(), grouplist.end(), [&](Group &g)
-                          {if(g.getid() == groupid)return true; });
+        auto it = find_if(grouplist.begin(), grouplist.end(), [&](Group &g){if(g.getid() == groupid)return true; });
         if (it != grouplist.end())
         {
             string groupname = it->getname();
             replace(groupname.begin(), groupname.end(), '\x01', ' ');
             auto& vec = it->getmembers();
-            auto t_it = find_if(vec.begin(), vec.end(), [&](GroupMember &m)
-                                {if(m.getusername() == fromusername)return true; });
+            auto t_it = find_if(vec.begin(), vec.end(), [&](GroupMember &m){if(m.getusername() == fromusername)return true; });
             if (t_it != vec.end())
             {
                 vec.erase(t_it);

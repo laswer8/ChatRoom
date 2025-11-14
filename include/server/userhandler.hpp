@@ -4,6 +4,24 @@
 
 class UserHandler{
     public:
+
+        bool Remove(User& user){
+            auto cache = DatabaseCache::GetInstance();
+            string username = user.getusername();
+            string primarykey = cache->GeneratePrimaryKey("Chat","User",username);
+            cache->cacheremove(primarykey);
+            //删除表
+            string sql = "delete from User where username = \'"+username+"\'";
+            auto ret = cache->MySQLquery("Chat",sql);
+            if(ret == nullptr)
+                return false;
+            //删除缓存
+            cache->cacheremove(primarykey);
+            //删除布隆过滤器中的记录
+            //优化点：布隆过滤器不支持删除操作，暂时不处理
+            return true;
+        }
+
         //User表的插入操作
         bool insert(User& user){
             //因为insert是添加一个新数据，所以布隆选择器和缓存里都是没有的，因此需要手动添加保证数据一致性
@@ -116,11 +134,34 @@ class UserHandler{
         }
         bool isonline(string username){
             auto cache = DatabaseCache::GetInstance();
-            string sql = "select 'true' from User where state = 'online' and username = \'"+username+"\'";
-            auto res = cache->MySQLquery("Chat",sql);
-            if(res == nullptr || res->res <= 0){
+            string primarykey = cache->GeneratePrimaryKey("Chat","User",username);
+            //判断是否存在该用户，防止数据库穿透
+            if(!cache->bm_exists(primarykey)){
+                LOG_INFO<<username<<"不存在";
                 return false;
             }
+            //先在redis中查找该用户
+            auto res = cache->cachefind("User",primarykey);
+            if(res != nullptr && !res->str.empty()){
+                //redis查找成功,primarykey value
+                json js = json::parse(res->str);
+                string state = js["state"].get<string>();
+                //如果缓存在redis中，查找到的其账号一定相同
+                if(state == "online")
+                {
+                    return true;
+                }
+                return false;
+            }
+
+            string sql = "select id,name,password,email,phone,state from User where username = \'"+username+"\' and state = 'online'";
+            auto ret = cache->MySQLquery("Chat",sql);
+            if(ret == nullptr || ret->res <= 0){
+                return false;
+            }
+            string value = "{\"id\":"+ret->str_vec[0]+",\"name\":\""+ret->str_vec[1]+"\",\"username\":\""+username+"\",\"password\":\""+ret->str_vec[2]+",\"email\":\""+ret->str_vec[3]+",\"phone\":\""+ret->str_vec[4]+",\"state\":\""+ret->str_vec[5]+"\"}";
+            cout<<value<<endl;
+            cache->cacheadd("User",primarykey,value,cache->RandomNum(3600,36000));
             return true;
         }
         //查询用户信息

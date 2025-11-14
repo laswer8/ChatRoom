@@ -50,6 +50,7 @@ public:
             //LOG_INFO<<"query nullptr";
             vector<OfflineMsg> res;
             OfflineMsg m;
+            m.Setusername(username);
             for(const auto& s:*result->vec){
                 m.SetJsonMsg(s);
                 res.emplace_back(m);
@@ -64,6 +65,7 @@ public:
         }
         vector<OfflineMsg> res;
         OfflineMsg m;
+        m.Setusername(username);
         for(const auto& s:ret->str_vec){
             m.SetJsonMsg(s);
             res.emplace_back(m);

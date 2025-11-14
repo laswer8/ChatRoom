@@ -35,14 +35,17 @@ public:
     bool request(string username,int groupid,string msg){
         auto cache = DatabaseCache::GetInstance();
         string sql;
+        string key = cache->GeneratePrimaryKey("Chat","AllGroup",to_string(groupid));
         //检查是否存在该群
-        auto res = cache->cachefind("AllGroup",cache->GeneratePrimaryKey("Chat","AllGroup",to_string(groupid)));
+        auto res = cache->cachefind("AllGroup",key);
         if(res == nullptr){
-            sql = "select true from AllGroup where groupid = "+to_string(groupid);
+            sql = "select groupname,groupdesc,creatorid from AllGroup where groupid = "+to_string(groupid);
             auto ret = cache->MySQLquery("Chat",sql);
             if(ret == nullptr || ret->res==0){
                 return false;
             }
+            string value = "{\"groupname\":\""+ret->str_vec[0]+"\",\"groupdesc\":\""+ret->str_vec[1]+"\",\"groupid\":"+to_string(groupid)+",\"creatorid\":\""+ret->str_vec[2]+"\"}";
+            cache->cacheadd("AllGroup",key,value,cache->RandomNum(3600,36000));
         }
         //请求一类一般不能添加布隆过滤器中，因为布隆过滤器不能删除键，一旦删除表中请求就会造成数据不一致
         sql = "insert into GroupREQ values("+to_string(groupid)+",'"+username+"','"+msg+"')";
@@ -65,25 +68,29 @@ public:
         //1. 检查是否有申请
         auto redisret = cache->cachefind("GroupREQ",primarykey);
         if(redisret == nullptr || redisret->str.empty()){
-            sql = "select 1 from GroupREQ where groupid = "+gid+" and reqname = '"+uid+"'";
+            sql = "select message from GroupREQ where groupid = "+gid+" and reqname = '"+uid+"'";
             auto ret = cache->MySQLquery("Chat",sql);
             if(ret == nullptr || ret->res == 0)
             {
                 LOG_INFO<<"不存在申请";
                 return false;
             }
+            string value = "{\"groupid\":"+to_string(groupid)+",\"reqname\":\""+uid+"\",\"message\":\""+ret->str_vec[0]+"\"}";
+            cache->cacheadd("GroupREQ",primarykey,value,cache->RandomNum(3600,36000));
         }
 
         //2.  添加进表
+        primarykey = cache->GeneratePrimaryKey("Chat","GroupUser",gid+":"+uid);
+        cache->cacheremove(primarykey);
         sql = "insert into `GroupUser` VALUES("+gid+",'"+uid+"','normal')";
         auto res = cache->MySQLquery("Chat",sql);
         if(res == nullptr){
             LOG_INFO<<"添加成员错误";
             return false;
         }
-        primarykey = cache->GeneratePrimaryKey("Chat","GroupUser",gid+":"+uid);
-        string value = "{\"groupid\":"+gid+",\"username\":\""+uid+"\",\"grouprole\":\"normal\"}";
-        cache->cacheadd("GroupUser",primarykey,value,cache->RandomNum(3600,36000));
+        cache->cacheremove(primarykey);
+        // string value = "{\"groupid\":"+gid+",\"username\":\""+uid+"\",\"grouprole\":\"normal\"}";
+        // cache->cacheadd("GroupUser",primarykey,value,cache->RandomNum(3600,36000));
         
         //3. 删除申请
         primarykey = cache->GeneratePrimaryKey("Chat","GroupREQ",gid+":"+uid);
@@ -142,7 +149,7 @@ public:
     //查询群组用户id列表
     vector<string> queryGroupMembers(int groupid,string username){
         auto cache = DatabaseCache::GetInstance();
-        string sql = "select username from GroupUser where groupid = "+to_string(groupid)+" and username != '"+username+"'";
+        string sql = "select username from GroupUser where groupid = "+to_string(groupid);
         auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr){
             return vector<string>();
@@ -163,16 +170,37 @@ public:
     //查询用户所在群组的信息
     vector<Group> queryGroup(string username){
         auto cache = DatabaseCache::GetInstance();
-        string sql =    "select `table1`.groupid , `table1`.groupname ,`table1`.groupdesc ,`User`.id as userid,`User`.username as username ,`User`.name as name,`User`.email as email,`User`.phone as phone ,`GroupUser`.grouprole as role, User.state as state \
-                        FROM `GroupUser` \
-                        left JOIN `User` \
-                        ON `GroupUser`.username = `User`.username \
-                        INNER JOIN ( \
-                            select `AllGroup`.groupid as groupid,`AllGroup`.groupname as groupname,`AllGroup`.groupdesc as groupdesc \
-                            FROM `GroupUser` INNER JOIN `AllGroup` \
-                            ON `GroupUser`.groupid = `AllGroup`.groupid \
-                            WHERE `GroupUser`.username = '"+username+"' ) `table1` \
-                        ON `GroupUser`.groupid = `table1`.groupid";
+        // string sql =    "select `table1`.groupid , `table1`.groupname ,`table1`.groupdesc ,`User`.id as userid,`User`.username as username ,`User`.name as name,`User`.email as email,`User`.phone as phone ,`GroupUser`.grouprole as role, User.state as state \
+        //                 FROM `GroupUser` \
+        //                 left JOIN `User` \
+        //                 ON `GroupUser`.username = `User`.username \
+        //                 INNER JOIN ( \
+        //                     select `AllGroup`.groupid as groupid,`AllGroup`.groupname as groupname,`AllGroup`.groupdesc as groupdesc \
+        //                     FROM `GroupUser` INNER JOIN `AllGroup` \
+        //                     ON `GroupUser`.groupid = `AllGroup`.groupid \
+        //                     WHERE `GroupUser`.username = '"+username+"' ) `table1` \
+        //                 ON `GroupUser`.groupid = `table1`.groupid";
+        string primaryky = cache->GeneratePrimaryKey("Chat","GroupUser","GroupUser:AllGroup:User:"+username);
+
+        string sql = R"(
+            SELECT 
+                ag.groupid,
+                ag.groupname,
+                ag.groupdesc,
+                u.id as userid,
+                u.username as username,
+                u.name as name,
+                u.email as email,
+                u.phone as phone,
+                gu.grouprole as role,
+                u.state as state
+            FROM `GroupUser` gu_main
+            INNER JOIN `AllGroup` ag ON gu_main.groupid = ag.groupid
+            INNER JOIN `GroupUser` gu ON ag.groupid = gu.groupid
+            LEFT JOIN `User` u ON gu.username = u.username
+            WHERE gu_main.username = )"+ username +R"(
+            ORDER BY ag.groupid, u.username
+        )";
         auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr){
             return vector<Group>();
@@ -210,7 +238,7 @@ public:
     //浏览指定群组信息
     vector<string> likequery(const string& key){
         auto cache = DatabaseCache::GetInstance();
-        string like = "%"+key+"%";
+        string like = key+"%";
         string sql = "SELECT `AllGroup`.groupid , `AllGroup`.groupname, `AllGroup`.groupdesc, `AllGroup`.creatorname,`User`.name from `AllGroup` INNER JOIN `User` ON `AllGroup`.creatorname = `User`.username WHERE groupname LIKE '"+like+"'";
         auto ret = cache->MySQLquery("Chat",sql);
         vector<string> res;

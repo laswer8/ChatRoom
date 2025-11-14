@@ -36,6 +36,7 @@ public:
                     js["email"] = user.getemail();
                     js["phone"] = user.getphone();
                     js["ErrNo"]=0;
+                    
                     //登录成功，记录用户连接
                     {
                         lock_guard<mutex> guard(m);
@@ -124,14 +125,45 @@ public:
         user.setpassword(pwd);
         user.setemail(js["email"].get<string>());
         user.setphone(js["phone"].get<string>());
+        {
+            lock_guard<mutex> guard(m);
+            if(Userconnmap.find(username) != Userconnmap.end()){
+                json result;
+                result["MsgType"] =  MsgType::REGIST_MSG;
+                result["ErrNo"] = 1;
+                result["message"]="该用户已存在";
+                conn->send(result.dump());
+                return;
+            }
+        }
         bool ret = handler->insert(user);
         if(ret){
-            if(ret){
+            //用户登录成功后，向redis订阅该用户
+            if(msglist->subscribemessage(username))
+            {
                 lock_guard<mutex> guard(m);
                 Userconnmap.insert({username, {name, conn}});
             }
-            //用户登录成功后，向redis订阅该用户
-            msglist->subscribemessage(username);
+            else{
+                if(handler->Remove(user)){
+                    json result;
+                    result["MsgType"] =  MsgType::REGIST_MSG;
+                    result["ErrNo"] = 1;
+                    result["message"]="注册失败,请稍后再试";
+                    conn->send(result.dump());
+                    return;
+                }else{
+                    LOG_INFO<<"注册异常：删除订阅失败用户操作异常："<<name<<":"<<username<<":"<<pwd;
+                    json result;
+                    result["MsgType"] =  MsgType::REGIST_MSG;
+                    result["ErrNo"] = 1;
+                    result["message"]="注册失败,请联系管理员";
+                    conn->send(result.dump());
+                    return;
+                }
+                
+            }
+            
             js["ErrNo"] = 0;
             js["userid"] = user.getid();
             conn->send(js.dump());    
@@ -158,6 +190,7 @@ public:
         }
         // 用户下线，在redis中取消订阅
         msglist->unsubscribe(username);
+        handler->offline(user);
         auto vec = friendhandler->queryfriendid(username);
         if(vec.empty())
             return;
@@ -287,7 +320,7 @@ public:
                     json result;
                     result["MsgType"] =  MsgType::TIP_MSG;
                     result["ErrNo"] = 1;
-                    result["message"] = "好友不在线,且消息离线储存异常";
+                    result["message"] = "对方不在线,且消息离线储存异常";
                     conn->send(result.dump());
                 }
             }
@@ -324,6 +357,11 @@ public:
                     msglist->publishmessage(username,js.dump());
                     return;
                 }
+                //好友不在线，需要储存离线消息
+                OfflineMsg off;
+                off.Setusername(username);
+                off.SetJsonMsg(js.dump());
+                OffMsghandler->insert(off);
             }else{
                 json js;
                 js["MsgType"]= MsgType::TIP_MSG;
@@ -439,7 +477,7 @@ public:
             }
         }
         js["fromstate"] = "offline";
-        retjs["fromstate"] = "offline";
+        //retjs["fromstate"] = "offline";
         conn->send(js.dump());
         //好友不在线，查询对方是否在线，如果在线表示不在同一台服务器上，需要发布订阅消息
         User user;

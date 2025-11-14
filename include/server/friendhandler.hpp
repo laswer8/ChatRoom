@@ -60,6 +60,8 @@ public:
         auto cache = DatabaseCache::GetInstance();
         //不需要检测是否存在申请，因为存在申请会导致插入失败
         //将添加好友的消息添加到FriendREQ表中，有req->id自身的id,req->friendid请求添加的id,req->jsonmsg json消息
+        string primarykey = cache->GeneratePrimaryKey("Chat","FriendREQ",username+":"+fromname);
+        cache->cacheremove(primarykey);
         string sql = "insert into FriendREQ values('"+username+"','"+fromname+"','"+jsonmsg+"')";
         auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr)
@@ -67,8 +69,28 @@ public:
             return false;
         }
         //请求一类一般不能添加布隆过滤器中，因为布隆过滤器不能删除键，一旦删除表中请求就会造成数据不一致
-        string primarykey = cache->GeneratePrimaryKey("Chat","FriendREQ",username+":"+fromname);
+        
+        cache->cacheremove(primarykey);
         cache->cacheadd("FriendREQ",primarykey,jsonmsg,cache->RandomNum(3600,36000));
+        return true;
+    }
+
+    bool checkREQ(FriendReq& req){
+        string username = req.getusername();
+        string fromname = req.getfromname();
+        auto cache = DatabaseCache::GetInstance();
+        string primarykey = cache->GeneratePrimaryKey("Chat","FriendREQ",username+":"+fromname);
+        auto res = cache->cachefind("FriendREQ",primarykey);
+        if(res == nullptr || res->str.empty()){
+            string sql = "select true from FriendREQ where username = '"+username+"' and fromname = '"+fromname+"'";
+            auto ret = cache->MySQLquery("Chat",sql);
+            if(ret == nullptr || ret->res ==0){
+                return false;
+            }
+            string value = "{\"username\":\""+username+"\",\"fromname\":\""+fromname+"\"}";
+            string time = cache->RandomNum(3600,36000);
+            cache->cacheadd("FriendREQ",primarykey,value,time);
+        }
         return true;
     }
 
@@ -102,6 +124,7 @@ public:
     vector<OfflineMsg> getrequest(FriendReq& req){
         auto cache = DatabaseCache::GetInstance();
         string username = req.getusername();
+
         string sql = "select message from FriendREQ where username = '"+username+"'";
         auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr || ret->res == 0){
@@ -122,24 +145,37 @@ public:
         string username = req.getusername();
         string friendname = req.getfriendname();
         auto cache = DatabaseCache::GetInstance();
+        FriendReq freq;
+        freq.setusername(username);
+        freq.setfromname(friendname);
         //检测是否存在申请
-        string sql = "select username from FriendREQ where username = '"+username+"' and fromname = '"+friendname+"'";
-        auto ret = cache->MySQLquery("Chat",sql);
-        if(ret == nullptr || ret->res == 0){
-            //LOG_INFO<<"申请1错误   res: "<<ret->res;
+        if(!checkREQ(freq)){
             return false;
         }
+        // string sql = "select username from FriendREQ where username = '"+username+"' and fromname = '"+friendname+"'";
+        // auto ret = cache->MySQLquery("Chat",sql);
+        // if(ret == nullptr || ret->res == 0){
+        //     //LOG_INFO<<"申请1错误   res: "<<ret->res;
+        //     return false;
+        // }
         //LOG_INFO<<ret->res<<" "<<ret->str_vec.size();
-        sql = "insert into Friend values('"+username+"','"+friendname+"'),('"+friendname+"','"+username+"')";
         string key1 =cache->GeneratePrimaryKey("Chat","Friend",username+":"+friendname);
         string key2 = cache->GeneratePrimaryKey("Chat","Friend",friendname+":"+username);
-        ret = cache->MySQLquery("Chat",sql);
+        cache->cacheremove(key1);
+        cache->cacheremove(key2);
+
+        string sql = "insert into Friend values('"+username+"','"+friendname+"'),('"+friendname+"','"+username+"')";
+        auto ret = cache->MySQLquery("Chat",sql);
         if(ret == nullptr)
         {
             return false;
         }
-        cache->bm_add(key1);
-        cache->bm_add(key2);
+        
+        // cache->bm_add(key1);
+        // cache->bm_add(key2);
+        
+        cache->cacheremove(key1);
+        cache->cacheremove(key2);
         string value1 = "{\"username\":\""+username+"\",\"friendname\":\""+friendname+"\"}";
         string value2 = "{\"username\":\""+friendname+"\",\"friendname\":\""+username+"\"}";
         string time = cache->RandomNum(3600,36000);
@@ -162,6 +198,7 @@ public:
         if(ret == nullptr){
             return false;
         }
+        cache->cacheremove(primarykey);
         return true;
     }
 
