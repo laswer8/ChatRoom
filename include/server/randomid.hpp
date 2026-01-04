@@ -1,7 +1,7 @@
 #ifndef  __ID_GENERATE_H__
 #define  __ID_GENERATE_H__
  
-#include"HeadFile.h"
+#include "HeadFile.h"
 
 //数据中心ID
 const uint16_t datacenterId = 1;

@@ -1,8 +1,7 @@
 //
 // Created by laswer on 2025/10/17.
 //
-#ifndef NEW_CONNECTPOOL_H
-#define NEW_CONNECTPOOL_H
+#pragma once
 #include "HeadFile.h"
 const int MAX_CONN = 10;
 
@@ -10,7 +9,7 @@ const string MYSQL_HOST = "127.0.0.1";
 const int MYSQL_PORT_ = 3306;
 const string MYSQL_USER = "laswer";
 const string MYSQL_PWD  =  "2836992987";
-const string MYSQL_DEFAULT_DB = "Chat";
+const string MYSQL_DEFAULT_DB = "ChatRoom";
 const string MYSQL_CHARSET = "utf8mb4";
 const int MYSQL_TIMEOUT = 60;
 
@@ -23,6 +22,11 @@ const string REDIS_FIND_LUA_PATH = "./lua/redis_find.lua";
 const string REDIS_ADD_LUA_PATH = "./lua/redis_add.lua";
 const string REDIS_REMOVE_LUA_PATH = "./lua/redis_remove.lua";
 const string REDIS_FIND_NO_BLOOM_LUA_PATH = "./lua/redis_find_no_bloom.lua";
+const string REDIS_GET_AND_REMOVE_LUA_PATH = "./lua/redis_get_and_remove.lua";
+const string REDIS_ZADD_LUA_PATH = "./lua/redis_zadd.lua";
+const string REDIS_ZRANGE_LUA_PATH = "./lua/redis_zrange.lua";
+const string REDIS_GET_RSL_LUA_PATH = "./lua/redis_get_rsl.lua";
+const string REDIS_UPDATE_RSL_LUA_PATH = "./lua/redis_update_rsl.lua";
 
 const int TRYAGAIN_COUNT = 3;
 const string BLOOMKEY = "bloom";
@@ -200,6 +204,8 @@ public:
 
     template<typename ... Args>
     bool excuteDDL_param(const std::string& sql, Args&&... args) {
+        //拒绝任何DDL操作
+        return false;
         if (!is_Alive())
             return false;
         if (this->mysql_stmt != nullptr) {
@@ -272,7 +278,7 @@ public:
         }
         try {
             shared_ptr<MySQLResult> res = make_shared<MySQLResult>();
-            transform(sql.begin(),sql.end(),sql.begin(),::tolower);
+            //transform(sql.begin(),sql.end(),sql.begin(),::tolower);
             this->mysql_stmt = mysql_stmt_init(this->mysql);
             if (!this->mysql_stmt) {
                 string info = mysql_error(this->mysql);
@@ -290,7 +296,7 @@ public:
                 throw runtime_error("MysqlObject::excuteDML_param -- 参数数量不匹配: "+sql);
             }
             if (param_count > 0) {
-                vector<MYSQL_BIND> binds = createBindings(forward<Args>(args)...);
+                vector<MYSQL_BIND> binds = createBindings(std::forward<Args>(args)...);
                 if (mysql_stmt_bind_param(this->mysql_stmt,binds.data()) != 0) {
                     string info = mysql_stmt_error(this->mysql_stmt);
                     cleanupBindings(binds);
@@ -372,10 +378,10 @@ public:
 
 private:
     template<typename... Args>
-    vector<MYSQL_BIND> createBindings(const Args&... args) {
+    vector<MYSQL_BIND> createBindings(Args&&... args) {
         vector<MYSQL_BIND> binds;
         binds.reserve(sizeof...(Args));
-        createBindingImpl(binds, forward<Args>(args)...);
+        createBindingImpl(binds, std::forward<Args>(args)...);
         return binds;
     }
     void createBindingImpl(vector<MYSQL_BIND>& binds) {}
@@ -385,7 +391,7 @@ private:
     //整形特例化
     template<typename T,typename... Rest>
     enable_if_t<is_integral_v<T> && !is_same_v<T,bool>>
-    createBindingImpl(vector<MYSQL_BIND>& binds,const T& value,const Rest&... rest) {
+    createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
         MYSQL_BIND bind;
         memset(&bind,0,sizeof(bind));
         if constexpr (is_same_v<T,int>) {
@@ -402,12 +408,12 @@ private:
             bind.is_unsigned = true;
         }
         binds.push_back(bind);
-        createBindingImpl(binds,forward<Rest>(rest)...);
+        createBindingImpl(binds,std::forward<Rest>(rest)...);
     }
     //整形特例化
     template<typename T,typename... Rest>
     enable_if_t<is_floating_point_v<T> && !is_same_v<T,bool>>
-    createBindingImpl(vector<MYSQL_BIND>& binds,const T& value,const Rest&... rest) {
+    createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
         MYSQL_BIND bind;
         memset(&bind,0,sizeof(bind));
         if constexpr (is_same_v<T,float>) {
@@ -418,11 +424,11 @@ private:
             bind.buffer = new double(value);
         }
         binds.push_back(bind);
-        createBindingImpl(binds,forward<Rest>(rest)...);
+        createBindingImpl(binds,std::forward<Rest>(rest)...);
     }
     //字符串特例化
     template<typename... Rest>
-    void createBindingImpl(vector<MYSQL_BIND>& binds,const string& value,const Rest&... rest) {
+    void createBindingImpl(vector<MYSQL_BIND>& binds,string&& value,Rest&&... rest) {
         MYSQL_BIND bind;
         memset(&bind,0,sizeof(bind));
         bind.buffer_type = MYSQL_TYPE_STRING;
@@ -432,17 +438,17 @@ private:
         bind.buffer_length = value.length();
 
         binds.push_back(bind);
-        createBindingImpl(binds,forward<Rest>(rest)...);
+        createBindingImpl(binds,std::forward<Rest>(rest)...);
     }
     // C风格字符串特例化
     template<typename... Rest>
-    void createBindingsImpl(std::vector<MYSQL_BIND>& binds, const char* value, Rest&&... rest) {
-        createBindingsImpl(binds, std::string(value), std::forward<Rest>(rest)...);
+    void createBindingImpl(std::vector<MYSQL_BIND>& binds, const char* value, Rest&&... rest) {
+        createBindingImpl(binds, std::string(value), std::forward<Rest>(rest)...);
     }
 
     //json特例化
     template<typename... Rest>
-    void createBindingImpl(vector<MYSQL_BIND>& binds,const json& value,const Rest&... rest) {
+    void createBindingImpl(vector<MYSQL_BIND>& binds,json&& value,Rest&&... rest) {
         MYSQL_BIND bind;
         memset(&bind,0,sizeof(bind));
         bind.buffer_type = MYSQL_TYPE_JSON;
@@ -453,29 +459,52 @@ private:
         bind.buffer_length = str.length();
 
         binds.push_back(bind);
-        createBindingImpl(binds,forward<Rest>(rest)...);
+        createBindingImpl(binds,std::forward<Rest>(rest)...);
     }
 
     //bool类型特例化
     template<typename... Rest>
-    void createBindingImpl(vector<MYSQL_BIND>& binds,const bool& value,const Rest&... rest) {
+    void createBindingImpl(vector<MYSQL_BIND>& binds,bool&& value,Rest&&... rest) {
         MYSQL_BIND bind;
         memset(&bind,0,sizeof(bind));
         bind.buffer_type = MYSQL_TYPE_BOOL;
         bind.buffer = new bool(value);
 
         binds.push_back(bind);
-        createBindingImpl(binds,forward<Rest>(rest)...);
+        createBindingImpl(binds,std::forward<Rest>(rest)...);
     }
 
     // 清理绑定内存
     void cleanupBindings(std::vector<MYSQL_BIND>& binds) {
         for (auto& bind : binds) {
             if (bind.buffer) {
-                delete[] static_cast<char*>(bind.buffer);
+                switch (bind.buffer_type) {
+                    case MYSQL_TYPE_LONG:
+                        if (bind.is_unsigned)
+                            delete static_cast<uint32_t*>(bind.buffer);
+                        else
+                            delete static_cast<int32_t*>(bind.buffer);
+                        break;
+                    case MYSQL_TYPE_LONGLONG:
+                        delete static_cast<long*>(bind.buffer);
+                        break;
+                    case MYSQL_TYPE_FLOAT:
+                        delete static_cast<float*>(bind.buffer);
+                        break;
+                    case MYSQL_TYPE_DOUBLE:
+                        delete static_cast<double*>(bind.buffer);
+                        break;
+                    case MYSQL_TYPE_BOOL:
+                        delete static_cast<bool*>(bind.buffer);
+                        break;
+                    default:
+                        delete[] static_cast<char*>(bind.buffer);
+                        break;
+                }
                 bind.buffer = nullptr;
             }
         }
+        binds.clear();
     }
 };
 
@@ -669,7 +698,7 @@ public:
                     res->vec = make_shared<vector<string>>();
                     res->count = 0;
                     for(int i = 0;i<this->result->elements;i++){
-                        if(this->result->element[i]->str)
+                        if(this->result->element[i]->type == REDIS_REPLY_STRING)
                         {
                             res->count++;
                             res->vec->emplace_back(string(this->result->element[i]->str));
@@ -715,6 +744,129 @@ public:
             return nullptr;
         }
     }
+
+    ///获取指定key的剩余过期时间ms，返回值大于0代表未过期、0代表已过期、-1代表没有设置过期时间、-2代表键不存在、-3代表执行错误
+    long long ttl(const string& key) {
+        if (!RedisEnsure()) {
+            return -3;
+        }
+        vector<string> argv{
+            "PTTL",key,"1"
+        };
+        auto res = call(argv);
+        if (!res || res->empty) {
+            LOG_INFO<<"RedisObject::lock(): 获取剩余时间 "<<key<<" 失败";
+            return -3;
+        }
+        return res->res;
+    }
+
+    bool get_and_remove(const string& key) {
+        if (!RedisEnsure()) {
+            return false;
+        }
+        string lua_str;
+        if (!GetLuaScript(REDIS_GET_AND_REMOVE_LUA_PATH,lua_str)) {
+            return false;
+        }
+        vector<string> argv{
+            "EVAL",lua_str,"1",key
+        };
+        auto res = call(argv);
+        if (!res || res->empty) {
+            LOG_INFO<<"RedisObject::add_and_remove(): 获取或删除 "<<key<<" 错误";
+            return false;
+        }
+        return true;
+    }
+
+    bool zadd(const string& key,const string& msg,const string& scope,const string& ttl_sec) {
+        if (!RedisEnsure()) {
+            return false;
+        }
+        string lua_str;
+        if (!GetLuaScript(REDIS_ZADD_LUA_PATH,lua_str)) {
+            return false;
+        }
+        vector<string> argv{
+            "EVAL",lua_str,"1",key,msg,scope,ttl_sec
+        };
+        auto res = call(argv);
+        if (!res || res->empty) {
+            LOG_INFO<<"RedisObject::zadd(): 添加有序列表 "<<key<<" 错误: "<<msg;
+            return false;
+        }
+        return true;
+    }
+
+    vector<string> zrange(const string& key,const string& start,const string& end,const bool& is_del) {
+        if (!RedisEnsure()) {
+            return {};
+        }
+        string lua_str;
+        if (!GetLuaScript(REDIS_ZRANGE_LUA_PATH,lua_str)) {
+            return {};
+        }
+        vector<string> argv{
+            "EVAL",lua_str,"1",key,start,end,is_del?"1":"0"
+        };
+        auto res = call(argv);
+        if (!res || res->empty || !res->count) {
+            LOG_INFO<<"RedisObject::zrange(): 获取有序列表元素 "<<key<<" 错误";
+            return {};
+        }
+        return *res->vec;
+    }
+
+    void update_rsl(const string& uid,const string& session_id,const string& msg,const string& ttl_sec) {
+        if (!RedisEnsure()) {
+            return;
+        }
+        string lua_str;
+        if (!GetLuaScript(REDIS_UPDATE_RSL_LUA_PATH,lua_str)) {
+            return;
+        }
+        vector<string> argv{
+            "EVAL",lua_str,"2",uid,session_id,msg,ttl_sec
+        };
+        call(argv);
+    }
+
+    vector<vector<string>> get_rsl(const string& uid,const string& ttl,const int& field_count = 3) {
+        if (!RedisEnsure()) {
+            return {};
+        }
+        string lua_str;
+        if (!GetLuaScript(REDIS_GET_RSL_LUA_PATH,lua_str)) {
+            return {};
+        }
+        vector<string> argv{
+            "EVAL",lua_str,"1",uid,ttl
+        };
+        auto res = call(argv);
+        if (!res || res->empty || !res->count) {
+            LOG_INFO<<"RedisObject::get_rsl(): 最近访问记录为空";
+            return {};
+        }
+        vector<vector<string>> rsl;
+        if (field_count > 0) {
+            rsl.reserve(res->count / field_count);
+        }
+        try{
+            for (auto i = 0;i < res->count;i += field_count) {
+                vector<string> item;
+                item.reserve(field_count);
+                for (auto j = 0;j < field_count;++j)
+                    item.emplace_back(res->vec->at(i+j));
+                rsl.emplace_back(std::move(item));
+            }
+            return rsl;
+        }catch (...) {
+            LOG_INFO<<"RedisObject::get_rsl(): 解析rsl结果错误";
+            return {};
+        }
+    }
+
 
     bool lock(const string& key,const string& value,const string& ttl) {
         if (!RedisEnsure()) {
@@ -764,11 +916,11 @@ public:
 
     string bloom_find(const string& bf_key,const string& key,const uint64_t& ttl) {
         if (!RedisEnsure()) {
-            return string();
+            return {};
         }
         string lua_str;
         if (!GetLuaScript(REDIS_FIND_LUA_PATH,lua_str)) {
-            return string();
+            return {};
         }
         vector<string> argv{
             "EVAL",lua_str,"2",bf_key,key,to_string(ttl)
@@ -776,31 +928,31 @@ public:
         try {
             auto res = call(argv);
             if (!res || !res->vec || res->empty) {
-                LOG_INFO<<"RedisObject::find(): Redis查询 "<<key<<" 错误";
-                return string();
+                LOG_INFO<<"RedisObject::bloom_find(): Redis查询 "<<key<<" 错误";
+                return {};
             }
             int ret_type = stoi(res->vec->at(0));
             if (ret_type == -1) {
-                LOG_INFO<<"RedisObject::find(): 键 "<<key<<" 不存在";
-                return string();
+                LOG_INFO<<"RedisObject::bloom_find(): 键 "<<key<<" 不存在";
+                return {};
             }else if (ret_type == 0) {
-                LOG_INFO<<"RedisObject::find(): 键 "<<key<<" 不存在于Redis,继续在数据库中查找";
+                LOG_INFO<<"RedisObject::bloom_find(): 键 "<<key<<" 不存在于Redis,继续在数据库中查找";
                 return string("__CONTINUE__");
             }
             return res->vec->at(1);
         }catch (const exception& e) {
-            LOG_ERROR<<"RedisObject::find(): 查找 "<<key<<" 错误："<<e.what();
-            return string();
+            LOG_ERROR<<"RedisObject::bloom_find(): 查找 "<<key<<" 错误："<<e.what();
+            return {};
         }
     }
 
     string find(const string& key,const uint64_t& ttl) {
         if (!RedisEnsure()) {
-            return string();
+            return {};
         }
         string lua_str;
         if (!GetLuaScript(REDIS_FIND_NO_BLOOM_LUA_PATH,lua_str)) {
-            return string();
+            return {};
         }
         vector<string> argv{
             "EVAL",lua_str,"1",key,to_string(ttl)
@@ -809,7 +961,7 @@ public:
             auto res = call(argv);
             if (!res || !res->vec || res->empty) {
                 LOG_INFO<<"RedisObject::find(): Redis查询 "<<key<<" 错误";
-                return string();
+                return {};
             }
             int ret_type = stoi(res->vec->at(0));
             if (ret_type == 0) {
@@ -819,7 +971,7 @@ public:
             return res->vec->at(1);
         }catch (const exception& e) {
             LOG_ERROR<<"RedisObject::find(): 查找 "<<key<<" 错误："<<e.what();
-            return string();
+            return {};
         }
     }
 
@@ -1047,8 +1199,8 @@ public:
     // 注册锁续期
     bool registerLock(const string& lock_key,
                      const string& lock_value,
-                     const uint64_t ttl,
-                     function<void(bool)> callback = nullptr) {
+                     const uint64_t& ttl,
+                     const function<void(bool)>& callback = nullptr) {
         {
             lock_guard<mutex> lock(m);
             renew_tasks[lock_key] = RenewTask(lock_key,lock_value,ttl,callback);
@@ -1094,22 +1246,25 @@ class ConnectPool{};
 
 template<>
 class ConnectPool<RedisObject>:public ConnectPoolInterface<RedisObject> {
+    enum ConnStatus {
+        ENABLE = 0,
+        WORKING,
+        CREATING,
+        DESTROYED
+    };
     struct RedisConn {
-        atomic<bool> is_used{false};
-        atomic<bool> is_valid{false};
+        atomic<ConnStatus> status{DESTROYED};
         atomic<uint64_t> last_update_time{0};
         shared_ptr<RedisObject> conn;
         RedisConn():conn(nullptr){}
-        RedisConn(const shared_ptr<RedisObject>& _conn,const bool& used = false, const bool& valid = false, const uint64_t& last_update = 0):conn(_conn),is_used(used),is_valid(valid),last_update_time(last_update){}
+        RedisConn(const shared_ptr<RedisObject>& _conn,const ConnStatus& statu = DESTROYED, const uint64_t& last_update = 0):status(statu),conn(_conn),last_update_time(last_update){}
         RedisConn(const RedisConn& right) {
-            this->is_used.store(right.is_used.load());
-            this->is_valid.store(right.is_valid.load());
+            this->status.store(right.status.load());
             this->last_update_time.store(right.last_update_time.load());
             this->conn = right.conn;
         }
         RedisConn& operator=(const RedisConn& right) {
-            this->is_used.store(right.is_used.load());
-            this->is_valid.store(right.is_valid.load());
+            this->status.store(right.status.load());
             this->last_update_time.store(right.last_update_time.load());
             this->conn = right.conn;
             return *this;
@@ -1154,16 +1309,30 @@ class ConnectPool<RedisObject>:public ConnectPoolInterface<RedisObject> {
             std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
-    bool CreateNewConnection() {
+    RedisConn* CreateNewConnection() {
         if (this->total_num.load(memory_order_acquire) >= this->max_size)
-            return false;
-        shared_ptr<RedisObject> conn = create_redis_object();
-        if (!conn) {
-            return false;
+            return nullptr;
+        ConnStatus except = ConnStatus::DESTROYED;
+        // size_t size = this->total_num.load(memory_order_acquire);
+        for (auto i = 0; i< this->max_size;++i) {
+            auto& conn = pool->at(i);
+            except = ConnStatus::DESTROYED;
+            if (!conn.conn and conn.status.compare_exchange_strong(except,ConnStatus::CREATING,memory_order_acq_rel)) {
+                    shared_ptr<RedisObject> redis_conn = create_redis_object();
+                    if (!redis_conn) {
+                        conn.status.store(DESTROYED,memory_order_release);
+                        return nullptr;
+                    }
+                    pool->at(i).conn = redis_conn;
+                    this->total_num.fetch_add(1,memory_order_release);
+                    except = CREATING;
+                    if (!conn.status.compare_exchange_strong(except,ENABLE,memory_order_acq_rel)) {
+                        conn.status.store(DESTROYED,memory_order_release);
+                    }
+                    return &conn;
+            }
         }
-        this->pool->emplace_back(conn,false,true,getCurrentTimestamp());
-        this->total_num.fetch_add(1,memory_order_release);
-        return true;
+        return nullptr;
     }
 
     RedisConn* findConnectionEntry(const std::shared_ptr<RedisObject>& conn) {
@@ -1179,25 +1348,18 @@ class ConnectPool<RedisObject>:public ConnectPoolInterface<RedisObject> {
     //CAS获取
     shared_ptr<RedisObject> tryGetAvailableConnection() {
         size_t offset = available_offset.load(std::memory_order_acquire);
-        const size_t size = total_num.load(memory_order_acquire);
 
-        for (size_t i = 0; i < size; ++i) {
-            size_t index = (offset + i) % size;
-
-            if (index < pool->size()) {
-                auto& conn = pool->at(index);
-
-                // CAS获取连接
-                bool expected = false;
-                if (conn.is_valid.load(std::memory_order_acquire) &&
-                    !conn.is_used.load(std::memory_order_acquire) &&
-                    conn.is_used.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-                        conn.last_update_time.store(getCurrentTimestamp(),std::memory_order_release);
-                        available_offset.store((index + 1) % size, std::memory_order_release);
-                        active_num.fetch_add(1, std::memory_order_acq_rel);
-                        return conn.conn;
-                    }
-            }
+        for (size_t i = 0; i < max_size; ++i) {
+            size_t index = (offset + i) % max_size;
+            auto& conn = pool->at(index);
+            // CAS获取连接
+            ConnStatus expected = ENABLE;
+            if (conn.conn && conn.status.compare_exchange_strong(expected,WORKING,memory_order_acq_rel)) {
+                    conn.last_update_time.store(getCurrentTimestamp(),std::memory_order_release);
+                    available_offset.store((index + 1) % max_size, std::memory_order_release);
+                    active_num.fetch_add(1, std::memory_order_acq_rel);
+                    return conn.conn;
+                }
         }
         return nullptr;
     }
@@ -1205,24 +1367,17 @@ class ConnectPool<RedisObject>:public ConnectPoolInterface<RedisObject> {
     //阻塞获取
     shared_ptr<RedisObject> blockGetAvailableConnection() {
         size_t offset = available_offset.load(std::memory_order_acquire);
-        const size_t size = total_num.load(memory_order_acquire);
-        shared_lock<shared_mutex> lock(m);
-        for (size_t i = 0; i < size; ++i) {
-            size_t index = (offset + i) % size;
-
-            if (index < pool->size()) {
-                auto& conn = pool->at(index);
-
-                // CAS获取连接
-                bool expected = false;
-                if (conn.is_valid.load(std::memory_order_acquire) &&
-                    !conn.is_used.load(std::memory_order_acquire) &&
-                    conn.is_used.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-                    conn.last_update_time.store(getCurrentTimestamp(),std::memory_order_release);
-                    available_offset.store((index + 1) % size, std::memory_order_release);
-                    active_num.fetch_add(1, std::memory_order_acq_rel);
-                    return conn.conn;
-                    }
+        unique_lock<shared_mutex> lock(m);
+        for (size_t i = 0; i < max_size; ++i) {
+            size_t index = (offset + i) % max_size;
+            auto& conn = pool->at(index);
+            // CAS获取连接
+            ConnStatus expected = ENABLE;
+            if (conn.conn && conn.status.compare_exchange_strong(expected,WORKING,memory_order_acq_rel)) {
+                conn.last_update_time.store(getCurrentTimestamp(),std::memory_order_release);
+                available_offset.store((index + 1) % max_size, std::memory_order_release);
+                active_num.fetch_add(1, std::memory_order_acq_rel);
+                return conn.conn;
             }
         }
         return nullptr;
@@ -1270,9 +1425,21 @@ class ConnectPool<RedisObject>:public ConnectPoolInterface<RedisObject> {
 
     void init() {
         this->lua_scripts = make_shared<unordered_map<string,string>>();
-        this->pool = make_shared<vector<RedisConn>>();
-        this->pool->reserve(this->max_size);
-        this->load_script({REDIS_ADD_LUA_PATH,REDIS_FIND_LUA_PATH,REDIS_LOCK_LUA_PATH,REDIS_UNLOCK_LUA_PATH,REDIS_REMOVE_LUA_PATH,REDIS_FIND_NO_BLOOM_LUA_PATH});
+        this->pool = make_shared<vector<RedisConn>>(this->max_size,RedisConn(nullptr,DESTROYED,getCurrentTimestamp()));
+        // this->pool->reserve(this->max_size);
+        this->load_script({
+            REDIS_ADD_LUA_PATH,
+            REDIS_FIND_LUA_PATH,
+            REDIS_LOCK_LUA_PATH,
+            REDIS_UNLOCK_LUA_PATH,
+            REDIS_REMOVE_LUA_PATH,
+            REDIS_FIND_NO_BLOOM_LUA_PATH,
+            REDIS_GET_AND_REMOVE_LUA_PATH,
+            REDIS_ZADD_LUA_PATH,
+            REDIS_ZRANGE_LUA_PATH,
+            REDIS_GET_RSL_LUA_PATH,
+            REDIS_UPDATE_RSL_LUA_PATH
+        });
         for (; this->total_num.load(memory_order_acquire) < this->base_size;) {
             this->CreateNewConnection();
         }
@@ -1285,49 +1452,40 @@ class ConnectPool<RedisObject>:public ConnectPoolInterface<RedisObject> {
             while (this->running.load(memory_order_acquire)) {
                 {
                     //获取需清理的连接
-                    auto size = this->pool->size();
-                    for (uint32_t i = 0; i < size; ++i) {
+                    auto size = this->max_size;
+                    for (auto i = 0; i < size; ++i) {
                         //只有清理线程才会减少pool的大小，而清理线程是单线程，因此不会有下标问题
-                        if (i>=this->pool->size())break;
+                        // if (i>=this->pool->size())break;
                         auto& conn = this->pool->at(i);
-                        if (conn.is_used.load(memory_order_acquire)) {
+                        if (conn.status.load(memory_order_acquire) == WORKING) {
                             continue;
                         }
                         if (getCurrentTimestamp() - conn.last_update_time.load(memory_order_acquire) > max_waiting_time_sec*1000) {
-                            if (conn.is_used.load(memory_order_acquire)) {
+                            if (conn.status.load(memory_order_acquire) == WORKING) {
                                 continue;
                             }
-                            conn.is_valid.store(false, std::memory_order_release);
-                            conn.is_used.store(true, std::memory_order_release);
+                            conn.conn = nullptr;
+                            conn.status.store(DESTROYED, std::memory_order_release);
+                            this->total_num.fetch_sub(1, std::memory_order_release);
                             continue;
                         }
                         if (!conn.conn->RedisEnsure()) {
                             //对该连接进行保活，如果失败表示异常，对其销毁
-                            if (conn.is_used.load(memory_order_acquire)) {
+                            if (conn.status.load(memory_order_acquire) == WORKING) {
                                 continue;
                             }
-                            conn.is_valid.store(false, std::memory_order_release);
-                            conn.is_used.store(true, std::memory_order_release);
+                            conn.conn = nullptr;
+                            conn.status.store(DESTROYED, std::memory_order_release);
+                            this->total_num.fetch_sub(1, std::memory_order_release);
                             continue;
                         }
-                    }
-                }
-                {
-                    while (this->active_num.load(memory_order_acquire) <= this->total_num.load(memory_order_acquire)) {
-                        auto it = remove_if(this->pool->begin(), this->pool->end(), [&](RedisConn& _conn) {
-                           return !_conn.is_valid.load(std::memory_order_acquire);
-                        });
-                        if (it == this->pool->end())
-                            break;
-                        this->pool->erase(it, this->pool->end());
-                        this->total_num.store(this->pool->size(), std::memory_order_release);
                     }
                     if (this->active_num.load(memory_order_acquire) > this->total_num.load(memory_order_acquire))
                         this->active_num.store(this->total_num.load(memory_order_acquire), std::memory_order_release);
                 }
                 {
                     //维护最小连接数，只维护固定次数，避免长时间阻塞业务
-                    unique_lock<shared_mutex> lock(m);
+                    // unique_lock<shared_mutex> lock(m);
                     count = this->total_num.load(memory_order_acquire);
                     while (count++ < this->base_size) {
                         this->CreateNewConnection();
@@ -1370,13 +1528,21 @@ public:
         }
         // 连接池未满时创建新连接
         if (total_num.load(std::memory_order_acquire) < max_size) {
-            unique_lock lock(m);
-            if (CreateNewConnection()) {
-                return pool->back().conn;
+            // unique_lock lock(m);
+            auto conn = CreateNewConnection();
+            if (conn) {
+                conn->status.store(WORKING, std::memory_order_release);
+                this->active_num.fetch_add(1,memory_order_acq_rel);
+            }else {
+                return nullptr;
             }
         }
 
         return nullptr;
+    }
+
+    shared_ptr<LockRenewThread> takeRenewThread() {
+        return this->renew_thread;
     }
 
     shared_ptr<RedisObject> try_take() override {
@@ -1387,12 +1553,15 @@ public:
         }
         // 连接池未满时创建新连接
         if (total_num.load(std::memory_order_acquire) < max_size) {
-            unique_lock lock(m);
-            if (CreateNewConnection()) {
-                return pool->back().conn;
+            // unique_lock lock(m);
+            auto conn = CreateNewConnection();
+            if (conn) {
+                conn->status.store(WORKING, std::memory_order_release);
+                this->active_num.fetch_add(1,memory_order_acq_rel);
+            }else {
+                return nullptr;
             }
         }
-
         return nullptr;
     }
 
@@ -1402,13 +1571,14 @@ public:
 
         // 查找连接条目并更新状态
         auto entry = findConnectionEntry(conn);
-        bool expected = true;
-        if (entry && entry->is_valid.load(std::memory_order_acquire) && entry->is_used.compare_exchange_strong(expected,false)) {
+        ConnStatus expected = WORKING;
+        if (entry && entry->status.compare_exchange_strong(expected,ENABLE)) {
             entry->last_update_time.store(getCurrentTimestamp(), std::memory_order_release);
-            //entry->is_used.store(false, std::memory_order_release);
             active_num.fetch_sub(1,memory_order_release);
+            conn = nullptr;
             return true;
         }
+        conn = nullptr;
         return false;
     }
 
@@ -1416,6 +1586,7 @@ public:
         return this->total_num.load(memory_order_acquire);
     }
     void resize(const size_t& size) override {
+        return;
         unique_lock<shared_mutex> lock(m);
         this->max_size = size;
     }
@@ -1437,13 +1608,11 @@ private:
     uint32_t renew_check_interval_ms; //续期锁线程检测时间
     uint32_t port;
     string host;
-    shared_ptr<ConnectPool<RedisObject>> redis_pool;
-    mutex m;
 
     RedisConnectionPoolBuilder(const string& ip = REDIS_HOST,const uint32_t& port = REDIS_PORT,const uint16_t& retry = 3,
         const uint16_t& min_num = 10,const uint32_t& max_num = 15,
         const uint32_t& timeout_sec = 30,const uint32_t& waiting_sec = 20,const uint32_t& renew_interval_ms = 1000):
-    retry_count(retry),base_size(min_num),max_size(max_num),connect_timeout_sec(timeout_sec),max_waiting_time_sec(waiting_sec),renew_check_interval_ms(renew_interval_ms),port(port),host(ip),redis_pool(nullptr) {
+    retry_count(retry),base_size(min_num),max_size(max_num),connect_timeout_sec(timeout_sec),max_waiting_time_sec(waiting_sec),renew_check_interval_ms(renew_interval_ms),port(port),host(ip){
 
     }
 public:
@@ -1490,16 +1659,13 @@ public:
         return shared_from_this();
     }
 
+    /// 构建Redis连接池，全局只创建一次，因此再调用build()前，应完成对应的配置
+    /// @return 成功返回shared_ptr<ConnectPool<RedisObject>>，失败返回nullptr
     shared_ptr<ConnectPool<RedisObject>> build() {
-        if (!this->redis_pool) {
-            lock_guard<mutex> lock(m);
-            if (!this->redis_pool) {
-                this->redis_pool = make_shared<ConnectPool<RedisObject>>(this->host,this->port,this->retry_count,
+        static shared_ptr<ConnectPool<RedisObject>> redis_pool = make_shared<ConnectPool<RedisObject>>(this->host,this->port,this->retry_count,
                     this->base_size,this->max_size,
                     this->connect_timeout_sec,this->max_waiting_time_sec,this->renew_check_interval_ms);
-            }
-        }
-        return this->redis_pool;
+        return redis_pool;
     }
 
 };
@@ -1507,23 +1673,25 @@ public:
 
 template<>
 class ConnectPool<MysqlObject>:public ConnectPoolInterface<MysqlObject> {
+    enum ConnStatus {
+        ENABLE = 0,
+        WORKING,
+        CREATING,
+        DESTROYED
+    };
     struct MysqlConn {
-        atomic<bool> is_used{false};
-        atomic<bool> is_valid{false};
+        atomic<ConnStatus> status{DESTROYED};
         atomic<uint64_t> last_update_time{0};
         shared_ptr<MysqlObject> conn;
         MysqlConn():conn(nullptr){}
-        MysqlConn(const shared_ptr<MysqlObject>& _conn,const bool& used = false, const bool& valid = false, const uint64_t& last_update = 0):
-            is_used(used),is_valid(valid),last_update_time(last_update),conn(_conn){}
+        MysqlConn(const shared_ptr<MysqlObject>& _conn,const ConnStatus& statu = DESTROYED, const uint64_t& last_update = 0):status(statu),conn(_conn),last_update_time(last_update){}
         MysqlConn(const MysqlConn& right) {
-            this->is_used.store(right.is_used.load());
-            this->is_valid.store(right.is_valid.load());
+            this->status.store(right.status.load());
             this->last_update_time.store(right.last_update_time.load());
             this->conn = right.conn;
         }
         MysqlConn& operator=(const MysqlConn& right) {
-            this->is_used.store(right.is_used.load());
-            this->is_valid.store(right.is_valid.load());
+            this->status.store(right.status.load());
             this->last_update_time.store(right.last_update_time.load());
             this->conn = right.conn;
             return *this;
@@ -1565,16 +1733,29 @@ class ConnectPool<MysqlObject>:public ConnectPoolInterface<MysqlObject> {
             std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
-    bool CreateNewConnection() {
+    MysqlConn* CreateNewConnection() {
         if (this->total_num.load(memory_order_acquire) >= this->max_size)
-            return false;
-        shared_ptr<MysqlObject> conn = create_mysql_object();
-        if (!conn) {
-            return false;
+            return nullptr;
+        ConnStatus except = ConnStatus::DESTROYED;
+        for (auto i = 0; i< this->max_size;++i) {
+            auto& conn = pool->at(i);
+            except = ConnStatus::DESTROYED;
+            if (!conn.conn and conn.status.compare_exchange_strong(except,ConnStatus::CREATING,memory_order_acq_rel)) {
+                shared_ptr<MysqlObject> redis_conn = create_mysql_object();
+                if (!redis_conn) {
+                    conn.status.store(DESTROYED,memory_order_release);
+                    return nullptr;
+                }
+                pool->at(i).conn = redis_conn;
+                this->total_num.fetch_add(1,memory_order_release);
+                except = CREATING;
+                if (!conn.status.compare_exchange_strong(except,ENABLE,memory_order_acq_rel)) {
+                    conn.status.store(DESTROYED,memory_order_release);
+                }
+                return &conn;
+            }
         }
-        this->pool->emplace_back(conn,false,true,getCurrentTimestamp());
-        this->total_num.fetch_add(1,memory_order_release);
-        return true;
+        return nullptr;
     }
 
     MysqlConn* findConnectionEntry(const std::shared_ptr<MysqlObject>& conn) {
@@ -1590,24 +1771,17 @@ class ConnectPool<MysqlObject>:public ConnectPoolInterface<MysqlObject> {
     //CAS获取
     shared_ptr<MysqlObject> tryGetAvailableConnection() {
         size_t offset = available_offset.load(std::memory_order_acquire);
-        const size_t size = total_num.load(memory_order_acquire);
 
-        for (size_t i = 0; i < size; ++i) {
-            size_t index = (offset + i) % size;
-
-            if (index < pool->size()) {
-                auto& conn = pool->at(index);
-
-                // CAS获取连接
-                bool expected = false;
-                if (conn.is_valid.load(std::memory_order_acquire) &&
-                    !conn.is_used.load(std::memory_order_acquire) &&
-                    conn.is_used.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-                        conn.last_update_time.store(getCurrentTimestamp(),std::memory_order_release);
-                        available_offset.store((index + 1) % size, std::memory_order_release);
-                        active_num.fetch_add(1, std::memory_order_acq_rel);
-                        return conn.conn;
-                    }
+        for (size_t i = 0; i < max_size; ++i) {
+            size_t index = (offset + i) % max_size;
+            auto& conn = pool->at(index);
+            // CAS获取连接
+            ConnStatus expected = ENABLE;
+            if (conn.conn && conn.status.compare_exchange_strong(expected,WORKING,memory_order_acq_rel)) {
+                conn.last_update_time.store(getCurrentTimestamp(),std::memory_order_release);
+                available_offset.store((index + 1) % max_size, std::memory_order_release);
+                active_num.fetch_add(1, std::memory_order_acq_rel);
+                return conn.conn;
             }
         }
         return nullptr;
@@ -1616,24 +1790,17 @@ class ConnectPool<MysqlObject>:public ConnectPoolInterface<MysqlObject> {
     //阻塞获取
     shared_ptr<MysqlObject> blockGetAvailableConnection() {
         size_t offset = available_offset.load(std::memory_order_acquire);
-        const size_t size = total_num.load(memory_order_acquire);
         shared_lock<shared_mutex> lock(m);
-        for (size_t i = 0; i < size; ++i) {
-            size_t index = (offset + i) % size;
-
-            if (index < pool->size()) {
-                auto& conn = pool->at(index);
-
-                // CAS获取连接
-                bool expected = false;
-                if (conn.is_valid.load(std::memory_order_acquire) &&
-                    !conn.is_used.load(std::memory_order_acquire) &&
-                    conn.is_used.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-                        conn.last_update_time.store(getCurrentTimestamp(),std::memory_order_release);
-                        available_offset.store((index + 1) % size, std::memory_order_release);
-                        active_num.fetch_add(1, std::memory_order_acq_rel);
-                        return conn.conn;
-                    }
+        for (size_t i = 0; i < max_size; ++i) {
+            size_t index = (offset + i) % max_size;
+            auto& conn = pool->at(index);
+            // CAS获取连接
+            ConnStatus expected = ENABLE;
+            if (conn.conn && conn.status.compare_exchange_strong(expected,WORKING,memory_order_acq_rel)) {
+                conn.last_update_time.store(getCurrentTimestamp(),std::memory_order_release);
+                available_offset.store((index + 1) % max_size, std::memory_order_release);
+                active_num.fetch_add(1, std::memory_order_acq_rel);
+                return conn.conn;
             }
         }
         return nullptr;
@@ -1641,8 +1808,7 @@ class ConnectPool<MysqlObject>:public ConnectPoolInterface<MysqlObject> {
 
 
     void init() {
-        this->pool = make_shared<vector<MysqlConn>>();
-        this->pool->reserve(this->max_size);
+        this->pool = make_shared<vector<MysqlConn>>(this->max_size,MysqlConn(nullptr,DESTROYED,getCurrentTimestamp()));
         for (; this->total_num.load(memory_order_acquire) < this->base_size;) {
             this->CreateNewConnection();
         }
@@ -1654,49 +1820,39 @@ class ConnectPool<MysqlObject>:public ConnectPoolInterface<MysqlObject> {
             while (this->running.load(memory_order_acquire)) {
                 {
                     //获取需清理的连接
-                    auto size = this->pool->size();
-                    for (size_t i = 0; i < size; ++i) {
+                    auto size = this->max_size;
+                    for (auto i = 0; i < size; ++i) {
                         //只有清理线程才会减少pool的大小，而清理线程是单线程，因此不会有下标问题
-                        if (i>=this->pool->size())break;
                         auto& conn = this->pool->at(i);
-                        if (conn.is_used.load(memory_order_acquire)) {
+                        if (conn.status.load(memory_order_acquire) == WORKING) {
                             continue;
                         }
                         if (getCurrentTimestamp() - conn.last_update_time.load(memory_order_acquire) > max_waiting_time_sec*1000) {
-                            if (conn.is_used.load(memory_order_acquire)) {
+                            if (conn.status.load(memory_order_acquire) == WORKING) {
                                 continue;
                             }
-                            conn.is_valid.store(false, std::memory_order_release);
-                            conn.is_used.store(true, std::memory_order_release);
+                            conn.conn = nullptr;
+                            conn.status.store(DESTROYED, std::memory_order_release);
+                            this->total_num.fetch_sub(1, std::memory_order_release);
                             continue;
                         }
                         if (!conn.conn->EnsureMySQL()) {
                             //对该连接进行保活，如果失败表示异常，对其销毁
-                            if (conn.is_used.load(memory_order_acquire)) {
+                            if (conn.status.load(memory_order_acquire) == WORKING) {
                                 continue;
                             }
-                            conn.is_valid.store(false, std::memory_order_release);
-                            conn.is_used.store(true, std::memory_order_release);
+                            conn.conn = nullptr;
+                            conn.status.store(DESTROYED, std::memory_order_release);
+                            this->total_num.fetch_sub(1, std::memory_order_release);
                             continue;
                         }
-                    }
-                }
-                {
-                    while (this->active_num.load(memory_order_acquire) <= this->total_num.load(memory_order_acquire)) {
-                        auto it = remove_if(this->pool->begin(), this->pool->end(), [&](MysqlConn& _conn) {
-                           return !_conn.is_valid.load(std::memory_order_acquire);
-                        });
-                        if (it == this->pool->end())
-                            break;
-                        this->pool->erase(it, this->pool->end());
-                        this->total_num.store(this->pool->size(), std::memory_order_release);
                     }
                     if (this->active_num.load(memory_order_acquire) > this->total_num.load(memory_order_acquire))
                         this->active_num.store(this->total_num.load(memory_order_acquire), std::memory_order_release);
                 }
                 {
                     //维护最小连接数，只维护固定次数，避免长时间阻塞业务
-                    unique_lock<shared_mutex> lock(m);
+                    // unique_lock<shared_mutex> lock(m);
                     count = this->total_num.load(memory_order_acquire);
                     while (count++ < this->base_size) {
                         this->CreateNewConnection();
@@ -1738,9 +1894,13 @@ public:
         }
         // 连接池未满时创建新连接
         if (total_num.load(std::memory_order_acquire) < max_size) {
-            unique_lock lock(m);
-            if (CreateNewConnection()) {
-                return pool->back().conn;
+            // unique_lock lock(m);
+            auto conn = CreateNewConnection();
+            if (conn) {
+                conn->status.store(WORKING, std::memory_order_release);
+                this->active_num.fetch_add(1,memory_order_acq_rel);
+            }else {
+                return nullptr;
             }
         }
 
@@ -1755,9 +1915,13 @@ public:
         }
         // 连接池未满时创建新连接
         if (total_num.load(std::memory_order_acquire) < max_size) {
-            unique_lock lock(m);
-            if (CreateNewConnection()) {
-                return pool->back().conn;
+            // unique_lock lock(m);
+            auto conn = CreateNewConnection();
+            if (conn) {
+                conn->status.store(WORKING, std::memory_order_release);
+                this->active_num.fetch_add(1,memory_order_acq_rel);
+            }else {
+                return nullptr;
             }
         }
 
@@ -1767,16 +1931,16 @@ public:
 
     bool recycle(shared_ptr<MysqlObject>& conn) override {
         if (!this->running.load(memory_order_acquire) || !conn) {return false;}
-
         // 查找连接条目并更新状态
         auto entry = findConnectionEntry(conn);
-        bool expected = true;
-        if (entry && entry->is_valid.load(std::memory_order_acquire) && entry->is_used.compare_exchange_strong(expected,false,memory_order_acq_rel)) {
+        ConnStatus expected = WORKING;
+        if (entry && entry->status.compare_exchange_strong(expected,ENABLE)) {
             entry->last_update_time.store(getCurrentTimestamp(), std::memory_order_release);
-            //entry->is_used.store(false, std::memory_order_release);
             active_num.fetch_sub(1,memory_order_release);
+            conn = nullptr;
             return true;
         }
+        conn = nullptr;
         return false;
     }
 
@@ -1784,6 +1948,7 @@ public:
         return this->total_num.load(memory_order_acquire);
     }
     void resize(const size_t& size) override {
+        return;
         unique_lock<shared_mutex> lock(m);
         this->max_size = size;
     }
@@ -1803,8 +1968,6 @@ private:
     uint32_t max_waiting_time_sec; //连接最大空闲时间
     uint32_t keepalive_check_interval_ms; //续期锁线程检测时间
     shared_ptr<ConnectionHead> conn_head;
-    shared_ptr<ConnectPool<MysqlObject>> mysql_pool;
-    mutex m;
 
     MysqlConnectionPoolBuilder(const string& ip = REDIS_HOST,const uint32_t& port = REDIS_PORT,
         const string& db_name = MYSQL_DEFAULT_DB,const string& user_name=MYSQL_USER,const string& pwd = MYSQL_PWD,const string& _charset = MYSQL_CHARSET,
@@ -1812,7 +1975,7 @@ private:
         const uint16_t& min_num = 10,const uint32_t& max_num = 15,
         const uint32_t& timeout_sec = 30,const uint32_t& waiting_sec = 20,const uint32_t& keepalive_interval_ms = 1000):
     retry_count(retry),base_size(min_num),max_size(max_num),
-    connect_timeout_sec(timeout_sec),max_waiting_time_sec(waiting_sec),keepalive_check_interval_ms(keepalive_interval_ms),mysql_pool(nullptr) {
+    connect_timeout_sec(timeout_sec),max_waiting_time_sec(waiting_sec),keepalive_check_interval_ms(keepalive_interval_ms){
         conn_head = make_shared<ConnectionHead>(ip,port,user_name,pwd,db_name,connect_timeout_sec,retry_count);
     }
 public:
@@ -1882,14 +2045,8 @@ public:
     }
 
     shared_ptr<ConnectPool<MysqlObject>> build() {
-        if (!this->mysql_pool) {
-            lock_guard<mutex> lock(m);
-            if (!this->mysql_pool) {
-                this->mysql_pool = make_shared<ConnectPool<MysqlObject>>(this->conn_head,retry_count,base_size,max_size,connect_timeout_sec,max_waiting_time_sec,keepalive_check_interval_ms);
-            }
-        }
-        return this->mysql_pool;
+        static shared_ptr<ConnectPool<MysqlObject>> mysql_pool = make_shared<ConnectPool<MysqlObject>>(
+            this->conn_head,retry_count,base_size,max_size,connect_timeout_sec,max_waiting_time_sec,keepalive_check_interval_ms);
+        return mysql_pool;
     }
 };
-
-#endif  //NEW_CONNECTPOOL_H
