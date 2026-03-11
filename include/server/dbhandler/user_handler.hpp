@@ -4,7 +4,6 @@
 #include "../HeadFile.h"
 #include "../tables/user.hpp"
 #include "../tables/userinfo.hpp"
-#include "../dbcache.hpp"
 #include "../new_connectpool.hpp"
 
 class UserHandler {
@@ -26,8 +25,8 @@ public:
                 //队列已满
                 return make_pair(nullptr,nullptr);
             }
-            string sql = R"(SELECT user.username, userinfo.phone, userinfo.email, userinfo.last_login FROM user INNER JOIN userinfo ON user.uid = userinfo.uid WHERE user.uid = ?)";
-            res = conn->excuteDML_param(sql,uid);
+            string sql = R"(SELECT user.username,user.account, userinfo.phone, userinfo.email, userinfo.created_at FROM user INNER JOIN userinfo ON user.uid = userinfo.uid WHERE user.uid = ?)";
+            res = conn->excuteDML_param(sql,stoull(uid));
             mysql_pool->recycle(conn);
         }
         if (!res || !res->FieldsNum || !res->res){
@@ -39,53 +38,57 @@ public:
             j[res->FieldsName->at(i)] =  res->str_vec->at(0).at(i);
         }
         //获取结果
-        return make_pair(make_shared<User>(0,j["username"].get<string>()),
-            make_shared<UserInfo>(0,0,j["last_login"].get<uint64_t>(),
+        return make_pair(make_shared<User>(0,j["username"].get<string>(),j["account"].get<string>()),
+            make_shared<UserInfo>(0,j["created_at"].get<uint64_t>(),0,
                 j["phone"].get<string>(),j["email"].get<string>()));
     }
 
-    static json getFriendList(const string& uid) {
-        if (uid.empty())return {};
+    static int userGroupNum(const string& uid) {
+        if (uid.empty()) return -1;
+        shared_ptr<::MySQLResult> res = nullptr;
         try{
-            //缓存查询
-            auto db = DBCache::GetInstance();
-            if (!db) {
-                return {};
+            auto mysql_pool = MysqlConnectionPoolBuilder::GetInstance()->build();
+            if (!mysql_pool) {
+                //数据库连接池发生错误，拒绝业务执行
+                return -1;
             }
-            //好友列表缓存最长7天
-            auto ttl = db->GenerateTTL(3600000*24*5,3600000*24*7);
-            //查询sql
-            string sql = R"(SELECT fid, username FROM user INNER JOIN friend ON user.uid = friend.fid WHERE friend.uid = ?)";
-            json res = db->CacheFind("ChatRoom","friend",uid,ttl,":",sql,uid);
-            if (res.empty()) {
-                return {};
+            auto conn = mysql_pool->try_take();
+            if (!conn) {
+                //队列已满
+                return -1;
             }
-            return res;
+            string sql = R"(select COUNT(1) from groupuser WHERE uid = ?)";
+            res = conn->excuteDML_param(sql,stoull(uid));
+            mysql_pool->recycle(conn);
         }catch (exception& e) {
-            LOG_DEBUG<<"DBHandler::getFriendList(): "<<e.what();
-            return {};
+            LOG_DEBUG<<"DBHandler::getUserRole(): "<<e.what();
+            return -1;
         }
+        if (!res || !res->FieldsNum || !res->res){
+            //结果为空,用户不存在
+            return -1;
+        }
+        return stoi(res->str_vec->at(0).at(0));
     }
-    static json getGroupList(const string& uid) {
-        if (uid.empty())return {};
+
+    static void UpdateUserLastLogin(const string& uid) {
+        if (uid.empty())return;
         try{
-            //缓存查询
-            auto db = DBCache::GetInstance();
-            if (!db) {
-                return {};
+            auto mysql_pool = MysqlConnectionPoolBuilder::GetInstance()->build();
+            if (!mysql_pool) {
+                //数据库连接池发生错误，拒绝业务执行
+                return;
             }
-            //好友列表缓存最长7天
-            auto ttl = db->GenerateTTL(3600000*24*5,3600000*24*7);
-            //查询sql
-            string sql = R"(SELECT groupuser.gid,chatgroup.gname FROM chatgroup INNER JOIN groupuser ON chatgroup.gid = groupuser.gid WHERE groupuser.uid = ?)";
-            json res = db->CacheFind("ChatRoom","chatgroup",uid,ttl,":",sql,uid);
-            if (res.empty()) {
-                return {};
+            auto conn = mysql_pool->try_take();
+            if (!conn) {
+                //队列已满
+                return;
             }
-            return res;
+            string sql = R"(update userinfo set last_login = NOW() where uid = ?)";
+            conn->excuteDML_param(sql,stoull(uid));
+            mysql_pool->recycle(conn);
         }catch (exception& e) {
-            LOG_DEBUG<<"DBHandler::getFriendList(): "<<e.what();
-            return {};
+            LOG_INFO<<"DBHandler::UpdateUserLastLogin(): "<<e.what();
         }
     }
 
@@ -105,7 +108,7 @@ public:
                 return nullptr;
             }
             string sql = R"(select username,account,password from user where uid = ?)";
-            res = conn->excuteDML_param(sql,uid);
+            res = conn->excuteDML_param(sql,stoull(uid));
             mysql_pool->recycle(conn);
         }
         if (!res || !res->FieldsNum || !res->res) {
@@ -157,6 +160,79 @@ public:
             j["username"].get<string>(),
             account,
             j["password"].get<string>());
+    }
+
+    static json ConditionSearch(string& cond, const string& type) {
+        if (cond.empty() || type.empty()) return {};
+        shared_ptr<::MySQLResult> res = nullptr;
+        try{
+            auto mysql_pool = MysqlConnectionPoolBuilder::GetInstance()->build();
+            if (!mysql_pool) {
+                //数据库连接池发生错误，拒绝业务执行
+                return {};
+            }
+            auto conn = mysql_pool->try_take();
+            if (!conn) {
+                //队列已满
+                return {};
+            }
+            string sql;
+            if (type == "id") {
+                sql = R"(SELECT uid, username FROM user WHERE uid = ?)";
+                res = conn->excuteDML_param(sql,stoull(cond));
+            }
+            else if (type == "name") {
+                cond += "%";
+                sql = R"(SELECT uid, username FROM user WHERE username LIKE ?)";
+                res = conn->excuteDML_param(sql,cond);
+            }else {
+                return {};
+            }
+            mysql_pool->recycle(conn);
+        }catch (exception& e) {
+            LOG_DEBUG<<"DBHandler::ConditionSearch(): "<<e.what();
+            return {};
+        }
+        if (!res || !res->FieldsNum || !res->res){
+            //结果为空,用户不存在
+            return {};
+        }
+        json result = json::array();
+        json tmp;
+        for (auto i = 0; i < res->res; ++i) {
+            tmp["uid"] = res->str_vec->at(i).at(0);
+            tmp["username"] = res->str_vec->at(i).at(1);
+            result.emplace_back(tmp);
+        }
+        return result;
+    }
+
+    ///获取用户信息通过账号,只能通过数据库查询,查询成功返回用户信息，查询为空返回nullptr，数据库连接错误抛出runtime_error异常
+    bool appendUser(const uint64_t& uid,const string& username,const string& account,const string& password) {
+        if (account.empty()) return false;
+        shared_ptr<::MySQLResult> res = nullptr;
+        {
+            auto mysql_pool = MysqlConnectionPoolBuilder::GetInstance()->build();
+            if (!mysql_pool) {
+                //数据库连接池发生错误，拒绝业务执行
+                return false;
+            }
+            auto conn = mysql_pool->try_take();
+            if (!conn) {
+                //队列已满
+                return false;
+            }
+            //服务端存储哈希后的密码，因此无法使用密码进行条件查询
+            //使用触发器保持user表与userinfo表数据一致性
+            string sql = R"(insert into user(uid,username,account,password) value(?,?,?,?))";
+            res = conn->excuteDML_param(sql,uid,username,account,password);
+            mysql_pool->recycle(conn);
+        }
+        if (!res || !res->res) {
+            //执行失败
+            return false;
+        }
+        return true;
     }
 
 

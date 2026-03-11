@@ -3,6 +3,7 @@
 #include <iostream>
 #include <algorithm>
 #include <functional>
+#include <regex>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <fstream>
@@ -33,6 +34,8 @@
 #include <filesystem>
 #include <condition_variable>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/core_names.h>
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 #include <openssl/md5.h>

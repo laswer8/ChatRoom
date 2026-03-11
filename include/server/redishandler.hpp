@@ -32,7 +32,7 @@ public:
         }
     }
 
-    ///获取最近会话记录
+    ///更新最近会话记录
     void UpdateRSL(const string& uid,const string& session_id,const string& msg,const uint64_t& ttl_sec) {
         if (uid.empty() || session_id.empty() || ttl_sec <= 0) {
             return;
@@ -272,19 +272,65 @@ public:
             return false;
         }
     }
-    bool BfExistByAC(const string& database,const string& table,const string& account) {
+    bool BfExistByAC(const string& database,const string& table,const string& key) {
         try{
             //uid不为空，缓存查询
             auto cache = DBCache::GetInstance();
             if (!cache) {
                 return false;
             }
-            string primary_key = cache->GeneratePrimaryKey(database,table,account);
+            string primary_key = cache->GeneratePrimaryKey(database,table,key);
             if (!cache->bm_exists(primary_key)) {
                 //布隆过滤器表示不存在，直接返回
                 return false;
             }
             return true;
+        }catch (...) {
+            return false;
+        }
+    }
+
+    bool FindWithBloom(const string& key,const uint64_t& ttl,string& buffer) {
+        try{
+            shared_lock<shared_mutex> lock(mx);
+            auto redispool = RedisConnectionPoolBuilder::GetInstance()->build();
+            if (!redispool) {
+                return false;
+            }
+            auto conn = redispool->try_take();
+            if (!conn) {
+                //队列已满
+                return false;
+            }
+            buffer = conn->bloom_find(BLOOMKEY,key,ttl);
+            redispool->recycle(conn);
+            if (buffer.empty()) {
+                return false;
+            }else if (buffer == "__CONTINUE__") {
+                buffer.clear();
+                return false;
+            }
+            return true;
+        }catch (...) {
+            return false;
+        }
+    }
+
+    bool CacheExist(const string& key) {
+        try{
+            shared_lock<shared_mutex> lock(mx);
+            auto redispool = RedisConnectionPoolBuilder::GetInstance()->build();
+            if (!redispool) {
+                return false;
+            }
+            auto conn = redispool->try_take();
+            if (!conn) {
+                //队列已满
+                return false;
+            }
+            bool res = conn->exist(key);
+            redispool->recycle(conn);
+            return res;
         }catch (...) {
             return false;
         }

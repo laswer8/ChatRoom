@@ -2,10 +2,13 @@
 // Created by laswer on 2025/10/17.
 //
 #pragma once
+#include <boost/core/default_allocator.hpp>
+
+#include "chatservice.hpp"
 #include "HeadFile.h"
 const int MAX_CONN = 10;
 
-const string MYSQL_HOST = "127.0.0.1";
+const string MYSQL_HOST = "192.168.250.100";
 const int MYSQL_PORT_ = 3306;
 const string MYSQL_USER = "laswer";
 const string MYSQL_PWD  =  "2836992987";
@@ -13,8 +16,9 @@ const string MYSQL_DEFAULT_DB = "ChatRoom";
 const string MYSQL_CHARSET = "utf8mb4";
 const int MYSQL_TIMEOUT = 60;
 
-const string REDIS_HOST = "127.0.0.1";
+const string REDIS_HOST = "192.168.250.100";
 const int REDIS_PORT = 6379;
+const string REDIS_PWD = "2836992987";
 
 const string REDIS_LOCK_LUA_PATH = "./lua/redis_lock.lua";
 const string REDIS_UNLOCK_LUA_PATH = "./lua/redis_unlock.lua";
@@ -54,8 +58,8 @@ typedef struct  mysqlhead
 }ConnectionHead;
 
 typedef struct Result{
-    int res;
-    int  FieldsNum;
+    uint64_t res;
+    unsigned int  FieldsNum;
     shared_ptr<vector<string>> FieldsName;
     shared_ptr<vector<vector<string>>> str_vec;
     Result():res(0),FieldsNum(0),FieldsName(nullptr),str_vec(nullptr){}
@@ -81,7 +85,7 @@ private:
             mysql_options(this->mysql,MYSQL_SET_CHARSET_NAME, head->charset.c_str());
             mysql_options(this->mysql,MYSQL_OPT_CONNECT_TIMEOUT,&head->timeout);
             mysql_options(this->mysql,MYSQL_OPT_READ_TIMEOUT,&head->timeout);
-            mysql_options(this->mysql,MYSQL_OPT_RECONNECT,&head->retry);
+            //mysql_options(this->mysql,MYSQL_OPT_RECONNECT,&head->retry);
         }else {
             string errmsg = "UNKNOWN";
             if (this->mysql){
@@ -101,11 +105,44 @@ private:
             }
             throw runtime_error("MysqlObject::createConnection(): mysql_real_connect error - "+errmsg);
         }
+        LOG_INFO<<"Mysql连接成功 ("<<head->host<<":"<<head->port<<")";
+
+    }
+
+    // 移除 SQL 注释（防止被恶意绕过）
+    static std::string removeSqlComments(const std::string& sql) {
+        std::string result = sql;
+
+        // 处理单行注释 (-- ...)
+        std::regex singleLineComment(R"(--[^\n]*\n)");
+        result = std::regex_replace(result, singleLineComment, "\n");
+
+        return result;
+    }
+
+    // 判断是否为 INSERT 语句（支持所有变体）
+    static bool isInsertStatement(const std::string& sql) {
+        // 1. 先清理注释（关键安全步骤）
+        std::string cleanSql = removeSqlComments(sql);
+
+        // 2. 精确匹配 INSERT 语句模式
+        static const std::regex insertRegex(
+            R"(^\s*(INSERT\s+(IGNORE\s+)?|REPLACE\s+)INTO\b)",
+            std::regex_constants::icase  // 大小写不敏感
+        );
+
+        return std::regex_search(cleanSql, insertRegex);
     }
 
 public:
     bool is_Alive() {
-        return this->mysql&&mysql_ping(this->mysql) == 0;
+        try {
+            return this->mysql && (mysql_ping(this->mysql) == 0);
+        }catch (exception& e) {
+            LOG_ERROR<<e.what();
+            return false;
+        }
+
     }
 
     bool EnsureMySQL() {
@@ -244,7 +281,7 @@ public:
                     cleanupBindings(binds);
                     throw runtime_error("MysqlObject::excuteDDL_param -- 执行sql失败: "+info);
                 }
-                cleanupBindings(binds);
+                //cleanupBindings(binds);
             }else {
                 if (mysql_stmt_execute(this->mysql_stmt) != 0) {
                     string info = mysql_stmt_error(this->mysql_stmt);
@@ -264,6 +301,38 @@ public:
         }
     }
 
+    // 开启事务 (关闭自动提交)
+    bool beginTransaction() {
+        if (!this->mysql)return false;
+        if (mysql_autocommit(this->mysql,false)) {
+            LOG_INFO<<"Transaction Start Failed: "<<std::string(mysql_error(this->mysql));
+            return false;
+        }
+
+        return true;
+    }
+
+    // 提交事务
+    bool commit() {
+        if (!this->mysql)return false;
+        if (mysql_commit(this->mysql) != 0) {
+            LOG_INFO<<"Commit failed: "<<std::string(mysql_error(this->mysql));
+            return false;
+        }
+        mysql_autocommit(mysql, true); // 恢复自动提交
+        return true;
+    }
+
+    // 回滚事务
+    void rollback() {
+        try {
+            mysql_rollback(mysql);
+            mysql_autocommit(mysql, true); // 恢复自动提交
+        }catch (exception& e) {
+            LOG_INFO<<"Rollback failed: "<<std::string(e.what());
+        }
+    }
+
     template<typename ... Args>
     shared_ptr<MySQLResult> excuteDML_param(const std::string& sql, Args&&... args) {
         if (!is_Alive())
@@ -276,6 +345,7 @@ public:
             mysql_free_result(this->mysqlres);
             this->mysqlres = nullptr;
         }
+        vector<MYSQL_BIND> binds;
         try {
             shared_ptr<MySQLResult> res = make_shared<MySQLResult>();
             //transform(sql.begin(),sql.end(),sql.begin(),::tolower);
@@ -295,21 +365,23 @@ public:
             if (param_count != args_count) {
                 throw runtime_error("MysqlObject::excuteDML_param -- 参数数量不匹配: "+sql);
             }
-            if (param_count > 0) {
-                vector<MYSQL_BIND> binds = createBindings(std::forward<Args>(args)...);
-                if (mysql_stmt_bind_param(this->mysql_stmt,binds.data()) != 0) {
-                    string info = mysql_stmt_error(this->mysql_stmt);
-                    cleanupBindings(binds);
-                    throw runtime_error("MysqlObject::excuteDML_param -- 绑定参数失败: "+info);
-                }
+            // if (param_count > 0) {
+            binds = createBindings(std::forward<Args>(args)...);
+            if (mysql_stmt_bind_param(this->mysql_stmt,binds.data()) != 0) {
+                string info = mysql_stmt_error(this->mysql_stmt);
                 cleanupBindings(binds);
+                throw runtime_error("MysqlObject::excuteDML_param -- 绑定参数失败: "+info);
             }
+                //cleanupBindings(binds);
+            //}
             if (mysql_stmt_execute(this->mysql_stmt) != 0) {
                 string info = mysql_stmt_error(this->mysql_stmt);
+                cleanupBindings(binds);
                 throw runtime_error("MysqlObject::excuteDML_param -- 执行sql失败: "+info);
             }
             if (mysql_stmt_store_result(this->mysql_stmt) != 0) {
                 string info = mysql_stmt_error(this->mysql_stmt);
+                cleanupBindings(binds);
                 throw runtime_error("MysqlObject::excuteDML_param -- 存储结果失败: "+info);
             }
             this->mysqlres = mysql_stmt_result_metadata(this->mysql_stmt);
@@ -319,8 +391,14 @@ public:
                 //执行无结果集的操作（insert、delete、update），返回影响行数
                 res->FieldsNum = 0;
                 //插入比较特殊，返回插入id
-                string p = "insert into";
-                res->res = (sql.compare(0,p.length(),p) == 0) ?mysql_stmt_insert_id(this->mysql_stmt):mysql_stmt_affected_rows(this->mysql_stmt);
+                //string p = "insert into";
+                if (isInsertStatement(sql)) {
+                    res->res = 1;
+                }else {
+                    res->res = mysql_stmt_affected_rows(this->mysql_stmt);
+                }
+                //res->res = (sql.compare(0,p.length(),p) == 0) ?mysql_stmt_insert_id(this->mysql_stmt):mysql_stmt_affected_rows(this->mysql_stmt);
+                cleanupBindings(binds);
                 return res;
             }
             res->FieldsNum = mysql_num_fields(this->mysqlres);
@@ -339,10 +417,11 @@ public:
                 result_binds[i].buffer_length = string_buffers[i].size();
                 result_binds[i].length = &lengths[i];
 
-                res->FieldsName->emplace_back(fields[i].name);
+                res->FieldsName->at(i) = fields[i].name;
             }
 
             if (mysql_stmt_bind_result(this->mysql_stmt, result_binds.data()) != 0) {
+                cleanupBindings(binds);
                 throw std::runtime_error("MysqlObject::excuteDML_param -- 绑定结果集失败");
             }
             res->str_vec = make_shared<vector<vector<string>>>();
@@ -351,12 +430,12 @@ public:
             while (mysql_stmt_fetch(this->mysql_stmt) == 0) {
                 std::vector<std::string> row;
                 for (int i = 0; i < res->FieldsNum; ++i) {
-                    row.push_back(std::string(string_buffers[i].data(), lengths[i]));
+                    row.emplace_back(string_buffers[i].data(), lengths[i]);
                 }
                 res->res++;
                 res->str_vec->emplace_back(::move(row));
             }
-
+            cleanupBindings(binds);
             mysql_stmt_close(this->mysql_stmt);
             this->mysql_stmt = nullptr;
             mysql_free_result(this->mysqlres);
@@ -370,6 +449,9 @@ public:
             if (this->mysqlres != nullptr) {
                 mysql_free_result(this->mysqlres);
                 this->mysqlres = nullptr;
+            }
+            if (!binds.empty()) {
+                cleanupBindings(binds);
             }
             LOG_ERROR<<e.what();
             return nullptr;
@@ -389,70 +471,151 @@ private:
     //模板泛型编程
 
     //整形特例化
+    //4字节有符号整形类型特例化
     template<typename T,typename... Rest>
-    enable_if_t<is_integral_v<T> && !is_same_v<T,bool>>
+    enable_if_t<is_integral_v<decay_t<T>> && !is_same_v<decay_t<T>,bool> && is_signed_v<decay_t<T>> && (sizeof(decay_t<T>) == 4)>
     createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
         MYSQL_BIND bind;
         memset(&bind,0,sizeof(bind));
-        if constexpr (is_same_v<T,int>) {
-            bind.buffer_type = MYSQL_TYPE_LONG;
-            bind.buffer = new int32_t(value);
-            bind.is_unsigned = false;
-        }else if constexpr (is_same_v<T,long>) {
-            bind.buffer_type = MYSQL_TYPE_LONGLONG;
-            bind.buffer = new long(value);
-            bind.is_unsigned = false;
-        }else if constexpr (is_unsigned_v<T>) {
-            bind.buffer_type = MYSQL_TYPE_LONG;
-            bind.buffer = new uint32_t(value);
-            bind.is_unsigned = true;
-        }
+        bind.buffer_type = MYSQL_TYPE_LONG;
+        bind.buffer = new int32_t(value);
+        bind.is_unsigned = false;
         binds.push_back(bind);
         createBindingImpl(binds,std::forward<Rest>(rest)...);
     }
-    //整形特例化
+
+    //8字节有符号整形类型特例化
     template<typename T,typename... Rest>
-    enable_if_t<is_floating_point_v<T> && !is_same_v<T,bool>>
+    enable_if_t<is_integral_v<decay_t<T>> && !is_same_v<decay_t<T>,bool> && is_signed_v<decay_t<T>> && (sizeof(decay_t<T>) == 8)>
     createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
         MYSQL_BIND bind;
         memset(&bind,0,sizeof(bind));
-        if constexpr (is_same_v<T,float>) {
-            bind.buffer_type = MYSQL_TYPE_FLOAT;
-            bind.buffer = new float(value);
-        }else if constexpr (is_same_v<T,double>) {
-            bind.buffer_type = MYSQL_TYPE_DOUBLE;
-            bind.buffer = new double(value);
-        }
+        bind.buffer_type = MYSQL_TYPE_LONGLONG;
+        bind.buffer = new int64_t(value);
+        bind.is_unsigned = false;
         binds.push_back(bind);
         createBindingImpl(binds,std::forward<Rest>(rest)...);
     }
+    //4字节无符号整形类型特例化
+    template<typename T,typename... Rest>
+    enable_if_t<is_integral_v<decay_t<T>> && !is_same_v<decay_t<T>,bool> && is_unsigned_v<decay_t<T>> && (sizeof(decay_t<T>) == 4)>
+    createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
+        MYSQL_BIND bind;
+        memset(&bind,0,sizeof(bind));
+        bind.buffer_type = MYSQL_TYPE_LONG;
+        bind.buffer = new uint32_t(value);
+        bind.is_unsigned = true;
+        binds.push_back(bind);
+        createBindingImpl(binds,std::forward<Rest>(rest)...);
+    }
+
+    //8字节无符号整形类型特例化
+    template<typename T,typename... Rest>
+    enable_if_t<is_integral_v<decay_t<T>> && !is_same_v<decay_t<T>,bool> && is_unsigned_v<decay_t<T>> && (sizeof(decay_t<T>) == 8)>
+    createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
+        MYSQL_BIND bind;
+        memset(&bind,0,sizeof(bind));
+        bind.buffer_type = MYSQL_TYPE_LONGLONG;
+        bind.buffer = new uint64_t(value);
+        bind.is_unsigned = true;
+        binds.push_back(bind);
+        createBindingImpl(binds,std::forward<Rest>(rest)...);
+    }
+
+    // template<typename T,typename... Rest>
+    // enable_if_t<is_integral_v<decay_t<T>> && !is_same_v<decay_t<T>,bool>>
+    // createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
+    //     MYSQL_BIND bind;
+    //     memset(&bind,0,sizeof(bind));
+    //     if (is_same_v<T,int>) {
+    //         bind.buffer_type = MYSQL_TYPE_LONG;
+    //         bind.buffer = new int32_t(value);
+    //         bind.is_unsigned = false;
+    //     }else if (is_same_v<T,long>) {
+    //         bind.buffer_type = MYSQL_TYPE_LONGLONG;
+    //         bind.buffer = new long(value);
+    //         bind.is_unsigned = false;
+    //     }else if (is_same_v<T,uint64_t>){
+    //         bind.buffer_type = MYSQL_TYPE_LONGLONG;
+    //         bind.buffer = new long(value);
+    //         bind.is_unsigned = true;
+    //     }else if (is_unsigned_v<T>) {
+    //         bind.buffer_type = MYSQL_TYPE_LONG;
+    //         bind.buffer = new uint32_t(value);
+    //         bind.is_unsigned = true;
+    //     }
+    //     binds.push_back(bind);
+    //     createBindingImpl(binds,std::forward<Rest>(rest)...);
+    // }
+    //浮点型特例化
+    template<typename T,typename... Rest>
+    enable_if_t<is_floating_point_v<decay_t<T>> && (sizeof(decay_t<T>) == 4)>
+    createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
+        MYSQL_BIND bind;
+        memset(&bind,0,sizeof(bind));
+        bind.buffer_type = MYSQL_TYPE_FLOAT;
+        bind.buffer = new float(value);
+        binds.push_back(bind);
+        createBindingImpl(binds,std::forward<Rest>(rest)...);
+    }
+    template<typename T,typename... Rest>
+    enable_if_t<is_floating_point_v<decay_t<T>> && (sizeof(decay_t<T>) == 8)>
+    createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
+        MYSQL_BIND bind;
+        memset(&bind,0,sizeof(bind));
+        bind.buffer_type = MYSQL_TYPE_DOUBLE;
+        bind.buffer = new double(value);
+        binds.push_back(bind);
+        createBindingImpl(binds,std::forward<Rest>(rest)...);
+    }
+    // template<typename T,typename... Rest>
+    // enable_if_t<is_floating_point_v<decay_t<T>> && !is_same_v<decay_t<T>,bool>>
+    // createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
+    //     MYSQL_BIND bind;
+    //     memset(&bind,0,sizeof(bind));
+    //     if constexpr (is_same_v<T,float>) {
+    //         bind.buffer_type = MYSQL_TYPE_FLOAT;
+    //         bind.buffer = new float(value);
+    //     }else if constexpr (is_same_v<T,double>) {
+    //         bind.buffer_type = MYSQL_TYPE_DOUBLE;
+    //         bind.buffer = new double(value);
+    //     }
+    //     binds.push_back(bind);
+    //     createBindingImpl(binds,std::forward<Rest>(rest)...);
+    // }
     //字符串特例化
-    template<typename... Rest>
-    void createBindingImpl(vector<MYSQL_BIND>& binds,string&& value,Rest&&... rest) {
+    template<typename T, typename... Rest>
+    enable_if_t<std::is_same_v<decay_t<T>, std::string>>
+    createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
         MYSQL_BIND bind;
         memset(&bind,0,sizeof(bind));
         bind.buffer_type = MYSQL_TYPE_STRING;
-        char* buffer = new char[value.length() + 1];
-        strcpy(buffer, value.c_str());
+
+        string str = forward<T>(value);
+        char* buffer = new char[str.length() + 1];
+        strcpy(buffer, str.c_str());
         bind.buffer = buffer;
-        bind.buffer_length = value.length();
+        bind.buffer_length = str.length();
 
         binds.push_back(bind);
         createBindingImpl(binds,std::forward<Rest>(rest)...);
     }
     // C风格字符串特例化
-    template<typename... Rest>
-    void createBindingImpl(std::vector<MYSQL_BIND>& binds, const char* value, Rest&&... rest) {
+    template<typename T,typename... Rest>
+    enable_if_t<std::is_same_v<decay_t<T>,const char*> || std::is_same_v<decay_t<T>,char*>>
+    createBindingImpl(std::vector<MYSQL_BIND>& binds, T value, Rest&&... rest) {
         createBindingImpl(binds, std::string(value), std::forward<Rest>(rest)...);
     }
 
     //json特例化
-    template<typename... Rest>
-    void createBindingImpl(vector<MYSQL_BIND>& binds,json&& value,Rest&&... rest) {
+    template<typename T,typename... Rest>
+    enable_if_t<std::is_same_v<decay_t<T>,json>>
+    createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
         MYSQL_BIND bind;
         memset(&bind,0,sizeof(bind));
         bind.buffer_type = MYSQL_TYPE_JSON;
-        string str = value.dump();
+        json js = forward<T>(value);
+        string str = js.dump();
         char* buffer = new char[str.length() + 1];
         strcpy(buffer, str.c_str());
         bind.buffer = buffer;
@@ -463,13 +626,13 @@ private:
     }
 
     //bool类型特例化
-    template<typename... Rest>
-    void createBindingImpl(vector<MYSQL_BIND>& binds,bool&& value,Rest&&... rest) {
+    template<typename T,typename... Rest>
+    enable_if_t<is_same_v<decay_t<T>,bool>>
+    createBindingImpl(vector<MYSQL_BIND>& binds,T&& value,Rest&&... rest) {
         MYSQL_BIND bind;
         memset(&bind,0,sizeof(bind));
         bind.buffer_type = MYSQL_TYPE_BOOL;
         bind.buffer = new bool(value);
-
         binds.push_back(bind);
         createBindingImpl(binds,std::forward<Rest>(rest)...);
     }
@@ -533,9 +696,9 @@ private:
 
     bool CreateRedisConnect() {
         uint32_t count = 0;
-        while (count < retry_count) {
+        while (count <= retry_count) {
             if (count > 0) {
-                LOG_WARN << "RedisObject:CreateRedisConnect(): Redis连接失败，第 " << retry_count << " 次重试...";
+                LOG_WARN << "RedisObject:CreateRedisConnect(): Redis连接失败，第 " << count << " 次重试...";
                 this_thread::sleep_for(chrono::milliseconds(connect_interval_ms));
             }
 
@@ -564,7 +727,7 @@ private:
             if (redisSetTimeout(this->redis, timeout) != REDIS_OK) {
                 LOG_WARN << "RedisObject:CreateRedisConnect(): 设置Redis命令超时失败";
             }
-
+            redisCommand(this->redis, "AUTH %s", REDIS_PWD.c_str());
             LOG_INFO << "RedisObject:CreateRedisConnect(): Redis连接成功 (" << host << ":" << port << ")";
             return true;
         }
@@ -573,7 +736,7 @@ private:
         return false;
     }
 
-bool GetLuaScript(const string& script_path,string& lua_str) {
+    bool GetLuaScript(const string& script_path,string& lua_str) {
     auto lua_ = this->lua_map.lock();
     if (lua_) {
         if (lua_->count(script_path)<=0) {
@@ -604,39 +767,44 @@ bool GetLuaScript(const string& script_path,string& lua_str) {
 }
 public:
     bool RedisEnsure() {
-        if (this->redis and !this->redis->err) {
-            return true;
-        }
-        bool expect = false;
-        if (!this->ensuring.compare_exchange_strong(expect, true,memory_order_acq_rel)) {
-            //如果ensuring为true，代表当前连接正在进行保活，返回true
-            auto start = chrono::steady_clock::now();
-            while (this->ensuring.load(memory_order_acquire)) {
-                if (chrono::steady_clock::now() - start > chrono::seconds(connect_timeout)) {
-                    LOG_ERROR << "RedisEnsure(): 等待重连超时";
-                    return false;
-                }
-                std::this_thread::yield();
+        try{
+            if (this->redis != nullptr && this->redis->err == 0) {
+                return true;
             }
-            // 返回重连后的实际状态
-            return (this->redis && !this->redis->err);
-        }
-        if (this->redis and !this->redis->err) {
-            this->ensuring.store(false, memory_order_release);
-            return true;
-        }
-        if (this->redis) {
-            redisFree(this->redis);
-            this->redis = nullptr;
-        }
-        //this->redis = redisConnect(host.c_str(),port);
-        if (!this->CreateRedisConnect()) {
-            LOG_ERROR<<"RedisObject::RedisEnsure(): redis断线重连失败";
+            bool expect = false;
+            if (!this->ensuring.compare_exchange_strong(expect, true,memory_order_acq_rel)) {
+                //如果ensuring为true，代表当前连接正在进行保活，返回true
+                auto start = chrono::steady_clock::now();
+                while (this->ensuring.load(memory_order_acquire)) {
+                    if (chrono::steady_clock::now() - start > chrono::seconds(connect_timeout)) {
+                        LOG_ERROR << "RedisEnsure(): 等待重连超时";
+                        return false;
+                    }
+                    std::this_thread::yield();
+                }
+                // 返回重连后的实际状态
+                return (this->redis && !this->redis->err);
+            }
+            if (this->redis and !this->redis->err) {
+                this->ensuring.store(false, memory_order_release);
+                return true;
+            }
+            if (this->redis) {
+                redisFree(this->redis);
+                this->redis = nullptr;
+            }
+            //this->redis = redisConnect(host.c_str(),port);
+            if (!this->CreateRedisConnect()) {
+                LOG_ERROR<<"RedisObject::RedisEnsure(): redis断线重连失败";
+                this->ensuring.store(false,memory_order_release);
+                return false;
+            }
             this->ensuring.store(false,memory_order_release);
+            return true;
+        }catch (exception& e) {
+            LOG_DEBUG<<"RedisObject::GetLuaScript(): "<<e.what();
             return false;
         }
-        this->ensuring.store(false,memory_order_release);
-        return true;
     }
 
 
@@ -914,6 +1082,21 @@ public:
         return true;
     }
 
+    bool exist(const string& key) {
+        if (!RedisEnsure()) {
+            return false;
+        }
+
+        vector<string> argv{
+            "EXISTS",key
+        };
+        auto res = call(argv);
+        if (res->res == 0) {
+            return false;
+        }
+        return true;
+    }
+
     string bloom_find(const string& bf_key,const string& key,const uint64_t& ttl) {
         if (!RedisEnsure()) {
             return {};
@@ -937,7 +1120,7 @@ public:
                 return {};
             }else if (ret_type == 0) {
                 LOG_INFO<<"RedisObject::bloom_find(): 键 "<<key<<" 不存在于Redis,继续在数据库中查找";
-                return string("__CONTINUE__");
+                return "__CONTINUE__";
             }
             return res->vec->at(1);
         }catch (const exception& e) {
@@ -1190,6 +1373,7 @@ private:
     void cleanupExpiredTasks() {}
 public:
     LockRenewThread(const chrono::milliseconds& interval,const function<bool(const string&,const string&,const uint64_t&)>& renew_opt):check_interval_ms(interval),renew_operation(renew_opt) {
+        this->running.store(true,memory_order_release);
         this->startRenewScheduler();
     }
 
@@ -1318,18 +1502,18 @@ class ConnectPool<RedisObject>:public ConnectPoolInterface<RedisObject> {
             auto& conn = pool->at(i);
             except = ConnStatus::DESTROYED;
             if (!conn.conn and conn.status.compare_exchange_strong(except,ConnStatus::CREATING,memory_order_acq_rel)) {
-                    shared_ptr<RedisObject> redis_conn = create_redis_object();
-                    if (!redis_conn) {
-                        conn.status.store(DESTROYED,memory_order_release);
-                        return nullptr;
-                    }
-                    pool->at(i).conn = redis_conn;
-                    this->total_num.fetch_add(1,memory_order_release);
-                    except = CREATING;
-                    if (!conn.status.compare_exchange_strong(except,ENABLE,memory_order_acq_rel)) {
-                        conn.status.store(DESTROYED,memory_order_release);
-                    }
-                    return &conn;
+                shared_ptr<RedisObject> redis_conn = create_redis_object();
+                if (!redis_conn) {
+                    conn.status.store(DESTROYED,memory_order_release);
+                    return nullptr;
+                }
+                pool->at(i).conn = redis_conn;
+                this->total_num.fetch_add(1,memory_order_release);
+                except = CREATING;
+                if (!conn.status.compare_exchange_strong(except,ENABLE,memory_order_acq_rel)) {
+                    conn.status.store(DESTROYED,memory_order_release);
+                }
+                return &conn;
             }
         }
         return nullptr;
@@ -1451,13 +1635,16 @@ class ConnectPool<RedisObject>:public ConnectPoolInterface<RedisObject> {
             size_t count = 0;
             while (this->running.load(memory_order_acquire)) {
                 {
+                    if (this->total_num.load(memory_order_acquire) <= this->base_size) {
+                        continue;
+                    }
                     //获取需清理的连接
                     auto size = this->max_size;
                     for (auto i = 0; i < size; ++i) {
                         //只有清理线程才会减少pool的大小，而清理线程是单线程，因此不会有下标问题
                         // if (i>=this->pool->size())break;
                         auto& conn = this->pool->at(i);
-                        if (conn.status.load(memory_order_acquire) == WORKING) {
+                        if (conn.conn == nullptr || conn.status.load(memory_order_acquire) == WORKING) {
                             continue;
                         }
                         if (getCurrentTimestamp() - conn.last_update_time.load(memory_order_acquire) > max_waiting_time_sec*1000) {
@@ -1469,7 +1656,7 @@ class ConnectPool<RedisObject>:public ConnectPoolInterface<RedisObject> {
                             this->total_num.fetch_sub(1, std::memory_order_release);
                             continue;
                         }
-                        if (!conn.conn->RedisEnsure()) {
+                        if (conn.conn == nullptr || !conn.conn->RedisEnsure()) {
                             //对该连接进行保活，如果失败表示异常，对其销毁
                             if (conn.status.load(memory_order_acquire) == WORKING) {
                                 continue;
@@ -1820,11 +2007,14 @@ class ConnectPool<MysqlObject>:public ConnectPoolInterface<MysqlObject> {
             while (this->running.load(memory_order_acquire)) {
                 {
                     //获取需清理的连接
+                    if (this->total_num.load(memory_order_acquire) <= this->base_size) {
+                        continue;
+                    }
                     auto size = this->max_size;
                     for (auto i = 0; i < size; ++i) {
                         //只有清理线程才会减少pool的大小，而清理线程是单线程，因此不会有下标问题
                         auto& conn = this->pool->at(i);
-                        if (conn.status.load(memory_order_acquire) == WORKING) {
+                        if (conn.conn == nullptr || conn.status.load(memory_order_acquire) == WORKING) {
                             continue;
                         }
                         if (getCurrentTimestamp() - conn.last_update_time.load(memory_order_acquire) > max_waiting_time_sec*1000) {
@@ -1836,7 +2026,7 @@ class ConnectPool<MysqlObject>:public ConnectPoolInterface<MysqlObject> {
                             this->total_num.fetch_sub(1, std::memory_order_release);
                             continue;
                         }
-                        if (!conn.conn->EnsureMySQL()) {
+                        if (conn.conn == nullptr || !conn.conn->EnsureMySQL()) {
                             //对该连接进行保活，如果失败表示异常，对其销毁
                             if (conn.status.load(memory_order_acquire) == WORKING) {
                                 continue;
@@ -1969,7 +2159,7 @@ private:
     uint32_t keepalive_check_interval_ms; //续期锁线程检测时间
     shared_ptr<ConnectionHead> conn_head;
 
-    MysqlConnectionPoolBuilder(const string& ip = REDIS_HOST,const uint32_t& port = REDIS_PORT,
+    MysqlConnectionPoolBuilder(const string& ip = MYSQL_HOST,const uint32_t& port = MYSQL_PORT_,
         const string& db_name = MYSQL_DEFAULT_DB,const string& user_name=MYSQL_USER,const string& pwd = MYSQL_PWD,const string& _charset = MYSQL_CHARSET,
         const uint16_t& retry = 3,
         const uint16_t& min_num = 10,const uint32_t& max_num = 15,

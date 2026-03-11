@@ -18,6 +18,12 @@ public:
         return generate;
     }
 
+    //希望不同业务使用独立的雪花算法生成id,减少并发压力
+    static shared_ptr<Snowflake> GetInstance2(){
+        static shared_ptr<Snowflake> generate2 = shared_ptr<Snowflake>(new Snowflake());
+        return generate2;
+    }
+
     //无锁CAS生成ID
     uint64_t generateUniqueId() {
         uint64_t currentTimestamp_ = currentTimestamp();

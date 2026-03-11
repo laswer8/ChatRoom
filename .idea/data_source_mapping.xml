@@ -2,7 +2,11 @@
 <project version="4">
   <component name="DataSourcePerFileMappings">
     <file url="file://$APPLICATION_CONFIG_DIR$/consoles/db/203be739-7e87-4d2d-98a2-3d3a3e5b5690/console.sql" value="203be739-7e87-4d2d-98a2-3d3a3e5b5690" />
+    <file url="file://$APPLICATION_CONFIG_DIR$/consoles/db/203be739-7e87-4d2d-98a2-3d3a3e5b5690/console_1.sql" value="203be739-7e87-4d2d-98a2-3d3a3e5b5690" />
     <file url="file://$APPLICATION_CONFIG_DIR$/consoles/db/fb81529e-a8da-4579-a312-cf3f7ebec7f4/console.sql" value="fb81529e-a8da-4579-a312-cf3f7ebec7f4" />
+    <file url="file://$APPLICATION_CONFIG_DIR$/consoles/db/fb81529e-a8da-4579-a312-cf3f7ebec7f4/console_1.sql" value="fb81529e-a8da-4579-a312-cf3f7ebec7f4" />
+    <file url="file://$APPLICATION_CONFIG_DIR$/consoles/db/fb81529e-a8da-4579-a312-cf3f7ebec7f4/console_2.sql" value="fb81529e-a8da-4579-a312-cf3f7ebec7f4" />
+    <file url="file://$APPLICATION_CONFIG_DIR$/consoles/db/fb81529e-a8da-4579-a312-cf3f7ebec7f4/console_3.sql" value="fb81529e-a8da-4579-a312-cf3f7ebec7f4" />
     <file url="file://$PROJECT_DIR$/.idea/查询/查询.sql" value="203be739-7e87-4d2d-98a2-3d3a3e5b5690" />
     <file url="file://$PROJECT_DIR$/.idea/查询/查询_1.sql" value="203be739-7e87-4d2d-98a2-3d3a3e5b5690" />
     <file url="file://$PROJECT_DIR$/.idea/查询/查询_2.sql" value="fb81529e-a8da-4579-a312-cf3f7ebec7f4" />

@@ -56,7 +56,7 @@ private:
             return json::parse(data);
         } catch (const exception& e) {
             LOG_ERROR << "DBCache::deserializeData(): parse data to json error: " << e.what();
-            return json();
+            return {};
         }
     }
 
@@ -142,8 +142,6 @@ public:
         return instance;
     }
 
-
-
     uint64_t GenerateTTL(const uint64_t& min,const uint64_t& max) {
         if (min <= 0 or min > max)
             return 0;
@@ -218,6 +216,8 @@ public:
             if (redis_res != "__CONTINUE__" ) {
                 //此时要么存在缓存中，返回缓存值，要么不存在数据库中，返回空
                 pool->recycle(conn);
+                if (redis_res.empty())
+                    return {};
                 return deserializeData(redis_res);
             }
             //继续查找数据库
@@ -231,14 +231,14 @@ public:
             mysql_pool->recycle(mysql_conn);
             if (mysql_res == nullptr) {
                 pool->recycle(conn);
-                return json();
+                return {};
             }
             json query_res = praseMySQLResult(mysql_res);
             //当查询结果为空,缓存空值防止击穿
             if (query_res.empty()) {
                 conn->add(cache_key,"__NULL__",ttl);
                 pool->recycle(conn);
-                return json();
+                return {};
             }
             //当查询结果不为空，将其写入缓存
             conn->add(cache_key,serializeData(query_res),ttl);
@@ -252,7 +252,7 @@ public:
                 MysqlConnectionPoolBuilder::GetInstance()->build()->recycle(mysql_conn);
             }
             LOG_ERROR<<"DBCache:CacheFindWithBloom(): "<<cache_key<<" -- "<<param_sql<<" -- "<<e.what();
-            return json();
+            return {};
         }
     }
 

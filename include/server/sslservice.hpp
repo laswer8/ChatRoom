@@ -55,7 +55,12 @@ namespace SSLService {
     /// @return 相同返回true
     inline bool bcryptVartify(const string& str,const string& encode) {
         try {
-            return BCrypt::validatePassword(str,encode);
+            auto start = std::chrono::high_resolution_clock::now();
+            auto res = BCrypt::validatePassword(str,encode);
+            std::cout << "bcrypt解密验证函数执行时间: " <<
+                                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count()
+                            << " 毫秒" << std::endl;
+            return res;
         }catch (exception& e) {
             LOG_INFO<<e.what();
             return false;
@@ -66,28 +71,38 @@ namespace SSLService {
         const chrono::time_point<chrono::system_clock, chrono::system_clock::duration>& expires,
         const  chrono::time_point<chrono::system_clock, chrono::system_clock::duration>& issued_at,
         const string& jti = "",
-        const string& private_key_name = PRIVATE_KEY_PATH) {
+        const string& private_key_name = PRIVATE_KEY_PATH,
+        const string& public_key_name = PUBLIC_KEY_PATH) {
         static unordered_map<string,string> key_cache;
         static mutex m;
         try {
-            string key_content;
-            {
-                lock_guard<mutex> l(m);
-                if (key_cache.count(private_key_name) == 0) {
-                    key_content = read_file(private_key_name);
-                    key_cache[private_key_name] = key_content;
-                }else {
-                    key_content = key_cache[private_key_name];
-                }
-            }
 
-            auto builder = jwt::create().set_type("JWT").set_issuer(issuer).set_subject(subject).set_expires_at(expires).set_issued_at(issued_at);
+            string key_content = read_file(private_key_name);
+            string public_key_content = read_file(public_key_name);
+            // {
+            //     lock_guard<mutex> l(m);
+            //     if (key_cache.count(private_key_name) == 0) {
+            //         key_content = read_file(private_key_name);
+            //         key_cache[private_key_name] = key_content;
+            //     }else {
+            //         key_content = key_cache[private_key_name];
+            //     }
+            //     if (key_cache.count(public_key_name) == 0) {
+            //         public_key_content = read_file(public_key_name);
+            //         key_cache[public_key_name] = public_key_content;
+            //     }else {
+            //         public_key_content = key_cache[public_key_name];
+            //     }
+            // }
+
+            auto builder = jwt::create().set_type("JWT").
+            set_issuer(issuer).set_subject(subject).set_expires_at(expires).set_issued_at(issued_at);
             if (!jti.empty())
                 builder.set_id(jti);
             for (const auto& [key,value]: payload) {
                 builder.set_payload_claim(key,value);
             }
-            return builder.sign(jwt::algorithm::rs256(key_content));
+            return builder.sign(jwt::algorithm::rs256(public_key_content,key_content,"",""));
         }catch (exception& e) {
             LOG_INFO<<e.what();
             return {};
@@ -99,23 +114,33 @@ namespace SSLService {
         const string& subject = "",
         const string& jti = "",
         const uint64_t& leeway_seconds = 120,
+        const string& private_key_name = PRIVATE_KEY_PATH,
         const string& public_key_name = PUBLIC_KEY_PATH) {
-        static unordered_map<string,string> public_key_cache;   //公钥缓存
+        static unordered_map<string,string> key_cache;   //公钥缓存
         static mutex mx;
         try {
-            string key_content;
+            string key_content = read_file(private_key_name);
+            string public_key_content = read_file(public_key_name);
             {
                 lock_guard<mutex> l(mx);
-                if (public_key_cache.count(public_key_name) == 0) {
-                    key_content = read_file(public_key_name);
-                    public_key_cache[public_key_name] = key_content;
+                if (key_cache.count(private_key_name) == 0) {
+                    key_content = read_file(private_key_name);
+                    key_cache[private_key_name] = key_content;
                 }else {
-                    key_content = public_key_cache[public_key_name];
+                    key_content = key_cache[private_key_name];
+                }
+                if (key_cache.count(public_key_name) == 0) {
+                    public_key_content = read_file(public_key_name);
+                    key_cache[public_key_name] = public_key_content;
+                }else {
+                    public_key_content = key_cache[public_key_name];
                 }
             }
 
             auto decode = jwt::decode(token);
-            auto verifier = jwt::verify().allow_algorithm(jwt::algorithm::rs256(key_content)).with_issuer(issuer).with_type("JWT").leeway(leeway_seconds);
+            auto verifier = jwt::verify().allow_algorithm(
+                jwt::algorithm::rs256(public_key_content,key_content,"",""))
+            .with_issuer(issuer).with_type("JWT").leeway(leeway_seconds);
             if (!jti.empty()) {
                 verifier.with_id(jti);
             }

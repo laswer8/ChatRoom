@@ -6,9 +6,6 @@ local NULL_mark = '__NULL__'
 
 -- 查询布隆是否存在
 if redis.call('BF.EXISTS',bloomkey,findkey) == 0 then
-	-- 不存在缓存空值，防止误判
-	-- 根据类型进行具体操作
-	redis.call('SETNX',findkey,NULL_mark,'PX',ttl)
 	-- 不存在返回-1代表不存在数据
 	return {-1,''}
 else
@@ -17,7 +14,7 @@ else
 	if res then
 		if res == NULL_mark then
 			-- 布隆过滤器缓存的空值
-			redis.call('SETNX',findkey,NULL_mark,'PX',ttl)
+			redis.call('PEXPIRE', findkey, ttl)
 			return {-1,''}
 		else
 			-- 成功找到，续期，返回1代表成功

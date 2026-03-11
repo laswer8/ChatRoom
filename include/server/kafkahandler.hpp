@@ -21,7 +21,7 @@
 #define KAFKA_FETCH_TIMEOUT_MS 10000
 #define KAFKA_CONSUMER_OFFSET_STRATEGY "latest"
 #define KAFKA_TIMEOUT_INTERVAL_MS 3000
-#define KAFKA_LOCAL_SERVER_ID "192.168.250.100:443"
+#define KAFKA_LOCAL_SERVER_ID "chatserver_id1"
 
 //向kafka提交kv后执行的回调
 //主要用于判断操作是否成功
